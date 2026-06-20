@@ -2688,18 +2688,15 @@ class GameScene extends Phaser.Scene {
       if(pl.dashAfterImages) pl.dashAfterImages=pl.dashAfterImages.filter(a=>{a.life-=dt*2.5;if(a.life<=0) return false;g.fillStyle(a.col,a.life*0.4);g.fillRect((a.ox||a.x)-8,a.y-22,16,44);return true;});
       if(pl.teleportFlash>0){pl.teleportFlash=Math.max(0,(pl.teleportFlash||0)-dt*3);g.fillStyle(0x4080ff,pl.teleportFlash*0.3);g.fillCircle(pl.spr.x,pl.spr.y-20,40*pl.teleportFlash);}
       if(pl.vineSnares) pl.vineSnares=pl.vineSnares.filter(vs=>{vs.life-=dt;if(vs.life<=0) return false;const al=Math.min(1,vs.life)*0.7;for(let i=0;i<6;i++){const vx=vs.x-22+i*9+Math.sin(this.t*3+i)*3,vy=vs.y+8,vh=25+i%3*9;g.fillStyle(0x208010,al);g.fillRect(vx,vy-vh,3,vh);g.fillStyle(0x40c020,al*0.6);g.fillEllipse(vx+2,vy-vh,9,6);}return true;});
-      // Marcel — electric arc trail
+      // Marcel — electric arc trail (dots not lines)
       if(pl.electricArcs){
         pl.electricArcs=pl.electricArcs.filter(a=>{
-          a.life-=dt*2; if(a.life<=0) return false;
+          a.life-=dt*2.5; if(a.life<=0) return false;
           a.x+=a.dx*dt; a.y+=a.dy*dt;
-          g.lineStyle(1.5,a.col||0xffee00,a.life*0.8);
-          // Jagged lightning line
-          const x1=a.x,y1=a.y;
-          const x2=a.x+rnd(-12,12),y2=a.y+rnd(-8,8);
-          g.lineBetween(x1,y1,x2,y2);
-          g.fillStyle(a.col||0xffee00,a.life*0.5);
-          g.fillCircle(a.x,a.y,2);
+          g.fillStyle(a.col||0xffee00,a.life*0.7);
+          g.fillCircle(a.x,a.y,2.5*a.life);
+          g.fillStyle(0xffffff,a.life*0.3);
+          g.fillCircle(a.x,a.y,1.2*a.life);
           return true;
         });
       }
@@ -2718,24 +2715,23 @@ class GameScene extends Phaser.Scene {
         pl.thunderbolts=pl.thunderbolts.filter(tb=>{
           tb.life-=dt*2.5; if(tb.life<=0) return false;
           const alpha=tb.life;
-          // Main bolt — jagged line from sky to ground
-          g.lineStyle(3,0xffee00,alpha);
-          const segments=8;
+          // Jagged bolt as filled rects
+          const segH=(tb.y1-(tb.y0||0))/8;
           let py=tb.y0||0;
-          for(let s=0;s<segments;s++){
-            const ny=py+(tb.y1-tb.y0)/segments;
-            const jag=rnd(-14,14);
-            g.lineBetween(tb.x+jag,py,tb.x+rnd(-10,10),ny);
-            py=ny;
+          for(let s=0;s<8;s++){
+            const jag=(s%2===0?1:-1)*(6+s*1.5);
+            g.fillStyle(0xffee00,alpha*0.9);
+            g.fillRect(tb.x+jag-2,py,5,segH+1);
+            g.fillStyle(0xffffff,alpha*0.4);
+            g.fillRect(tb.x+jag-1,py,3,segH+1);
+            py+=segH;
           }
-          // Glow
-          g.fillStyle(0xffee00,alpha*0.25);
-          g.fillRect(tb.x-15,tb.y0||0,30,tb.y1-(tb.y0||0));
-          // Impact flash at bottom
-          g.fillStyle(0xffffff,alpha*0.6);
-          g.fillCircle(tb.x,tb.y1,16*alpha);
-          g.fillStyle(0xffee00,alpha*0.8);
-          g.fillCircle(tb.x,tb.y1,8*alpha);
+          // Glow column
+          g.fillStyle(0xffee00,alpha*0.12);
+          g.fillRect(tb.x-14,tb.y0||0,28,tb.y1-(tb.y0||0));
+          // Impact
+          g.fillStyle(0xffffff,alpha*0.7);g.fillCircle(tb.x,tb.y1,14*alpha);
+          g.fillStyle(0xffee00,alpha);g.fillCircle(tb.x,tb.y1,7*alpha);
           return true;
         });
       }
@@ -3830,47 +3826,38 @@ class GameScene extends Phaser.Scene {
 
       // Electric aura when moving
       if(isMoving){
-        g.fillStyle(0xffee00,0.06+Math.sin(t*8)*0.04);
-        g.fillCircle(x,y-16+bob,32);
+        g.fillStyle(0xffee00,0.05+Math.sin(t*8)*0.03);
+        g.fillCircle(x,y-16+bob,30);
       }
 
       // Shadow
       g.fillStyle(0x000000,0.2);g.fillEllipse(x,y+22,30,8);
 
-      // Zigzag lightning bolt tail — behind body, animated
-      const tailX=x-f*8, tailBaseY=y+8;
-      const tailSway=Math.sin(t*3)*6;
-      g.fillStyle(sk.accentCol,0.9);
-      // Zigzag segments
-      const tailPts=[
-        [tailX,tailBaseY],
-        [tailX-f*10,tailBaseY-8+tailSway],
-        [tailX-f*5,tailBaseY-16+tailSway],
-        [tailX-f*16,tailBaseY-22+tailSway],
-        [tailX-f*10,tailBaseY-30+tailSway],
-        [tailX-f*20,tailBaseY-38+tailSway],
-      ];
-      for(let i=0;i<tailPts.length-1;i++){
-        g.fillStyle(i===tailPts.length-2?0xffee00:sk.accentCol,0.9);
-        g.lineStyle(4,i===tailPts.length-2?0xffee00:sk.bodyCol,0.9);
-        g.lineBetween(tailPts[i][0],tailPts[i][1],tailPts[i+1][0],tailPts[i+1][1]);
-      }
+      // Zigzag lightning bolt tail — drawn as filled triangles (no lineStyle)
+      const tailSway=Math.sin(t*3)*5;
+      const tx=x-f*8;
+      g.fillStyle(sk.bodyCol,0.9);
+      // Segment 1
+      g.fillTriangle(tx,y+8,tx-f*12,y+2+tailSway,tx-f*6,y-4+tailSway);
+      // Segment 2
+      g.fillTriangle(tx-f*6,y-4+tailSway,tx-f*18,y-10+tailSway,tx-f*10,y-18+tailSway);
+      // Segment 3 (yellow tip)
+      g.fillStyle(sk.accentCol,0.95);
+      g.fillTriangle(tx-f*10,y-18+tailSway,tx-f*22,y-26+tailSway,tx-f*14,y-32+tailSway);
       // Tail tip — brown diamond
       g.fillStyle(sk.hairCol,1);
-      g.fillTriangle(tailPts[5][0]-6,tailPts[5][1],tailPts[5][0]+6,tailPts[5][1],tailPts[5][0],tailPts[5][1]-10);
+      g.fillRect(tx-f*22-3,y-32+tailSway-5,7,9);
 
-      // Legs — brown boots
+      // Legs
       g.fillStyle(sk.bootCol,1);
       g.fillEllipse(x-5,y+21+ll,13,7);g.fillEllipse(x+5,y+21+rl,13,7);
       g.fillRect(x-9,y+12+ll,9,11);g.fillRect(x+1,y+12+rl,9,11);
-      // Trousers — dark brown
       g.fillStyle(sk.hairCol,1);
       g.fillRect(x-8,y+2,7,12+ll);g.fillRect(x+1,y+2,7,12+rl);
 
-      // Body — yellow/brown tunic with lightning bolt emblem
-      g.fillStyle(sk.cloakCol,1);
-      g.fillRect(x-9,y-18,18,22);
-      // Lightning bolt on chest
+      // Body
+      g.fillStyle(sk.cloakCol,1);g.fillRect(x-9,y-18,18,22);
+      // Lightning bolt on chest (triangles only)
       g.fillStyle(sk.accentCol,0.9);
       g.fillTriangle(x-2,y-16,x+4,y-16,x+1,y-10);
       g.fillTriangle(x-3,y-10,x+3,y-10,x-1,y-4);
@@ -3878,84 +3865,74 @@ class GameScene extends Phaser.Scene {
       g.fillStyle(sk.hairCol,1);g.fillRect(x-9,y-1,18,4);
       g.fillStyle(sk.accentCol,0.8);g.fillCircle(x,y+1,3);
 
-      // Arms
+      // Arms and gloves
       g.fillStyle(sk.cloakCol,1);
       g.fillRect(x-18,y-16,10,4);g.fillRect(x+8,y-16,10,4);
-      // Gloves — fingerless brown
       g.fillStyle(sk.bootCol,1);
       g.fillRect(x-19,y-13,9,4);g.fillRect(x+9,y-13,9,4);
 
       // Weapon
       if(p.atk){
-        const ww=WEAPONS[SAVE.weapon];
         g.fillStyle(sk.accentCol,1);g.fillRect(x+f*10,y-26+bob,f*3,22);
         g.fillStyle(sk.bodyCol,1);g.fillRect(x+f*7,y-14+bob,f*9,3);
-        // Electric sparks on weapon during attack
         g.fillStyle(0xffee00,0.8);
-        g.fillCircle(x+f*11,y-26+bob+rnd(-4,4),3+Math.sin(t*12)*1.5);
+        g.fillCircle(x+f*11,y-26+bob,3+Math.sin(t*12)*1.5);
       }
 
-      // HEAD — round, Raichu-like
-      g.fillStyle(sk.headCol,1);g.fillCircle(x,y-28+bob,11);// main head
-      // Slightly wider at cheeks
+      // Head
       g.fillStyle(sk.headCol,1);g.fillEllipse(x,y-26+bob,22,18);
 
-      // Raichu EARS — large, pointed, brown outside with dark centre
-      // Left ear
+      // Ears — left
       g.fillStyle(sk.hairCol,1);
       g.fillTriangle(x-9,y-34+bob,x-16,y-58+bob,x-4,y-36+bob);
       g.fillStyle(0x1a0a04,0.8);
       g.fillTriangle(x-9,y-34+bob,x-14,y-54+bob,x-6,y-36+bob);
-      // Yellow ear tips
-      g.fillStyle(sk.accentCol,0.9);
-      g.fillCircle(x-13,y-56+bob,3);
-      // Right ear
+      g.fillStyle(sk.accentCol,0.9);g.fillCircle(x-13,y-56+bob,3);
+      // Ears — right
       g.fillStyle(sk.hairCol,1);
       g.fillTriangle(x+9,y-34+bob,x+16,y-58+bob,x+4,y-36+bob);
       g.fillStyle(0x1a0a04,0.8);
       g.fillTriangle(x+9,y-34+bob,x+14,y-54+bob,x+6,y-36+bob);
-      g.fillStyle(sk.accentCol,0.9);
-      g.fillCircle(x+13,y-56+bob,3);
+      g.fillStyle(sk.accentCol,0.9);g.fillCircle(x+13,y-56+bob,3);
 
-      // CHEEK PATCHES — red circles, glow when using powers
+      // Cheek patches — glow when power active
       const chkPower=p.specialCD<0.5||p.superActive;
-      const chkAlpha=chkPower?0.9+Math.sin(t*10)*0.1:0.7;
       const chkSize=chkPower?6+Math.sin(t*8)*1.5:5;
-      g.fillStyle(0xff2020,chkAlpha);
+      g.fillStyle(0xff2020,chkPower?0.95:0.75);
       g.fillCircle(x-6,y-25+bob,chkSize);
       g.fillCircle(x+6,y-25+bob,chkSize);
-      // Electric sparks from cheeks when powered up
+      // Cheek glow halos (no lineStyle — just transparent circles)
       if(chkPower){
-        g.lineStyle(1,0xffee00,0.7);
-        g.lineBetween(x-6,y-22+bob,x-10,y-18+bob);
-        g.lineBetween(x+6,y-22+bob,x+10,y-18+bob);
-        g.fillStyle(0xffee00,0.6);
-        g.fillCircle(x-10,y-18+bob,2);g.fillCircle(x+10,y-18+bob,2);
+        g.fillStyle(0xffee00,0.25+Math.sin(t*8)*0.15);
+        g.fillCircle(x-6,y-25+bob,chkSize+4);
+        g.fillCircle(x+6,y-25+bob,chkSize+4);
+        // Spark dots (no lineBetween)
+        g.fillStyle(0xffee00,0.8);
+        g.fillCircle(x-10,y-18+bob,2.5);g.fillCircle(x+10,y-18+bob,2.5);
+        g.fillCircle(x-8,y-20+bob,1.5);g.fillCircle(x+8,y-20+bob,1.5);
       }
 
-      // Eyes — large, amber, friendly
+      // Eyes
       g.fillStyle(sk.eyeCol,1);g.fillEllipse(x-4,y-30+bob,7,6);g.fillEllipse(x+4,y-30+bob,7,6);
       g.fillStyle(0x000000,1);g.fillCircle(x-4,y-30+bob,2.5);g.fillCircle(x+4,y-30+bob,2.5);
       g.fillStyle(0xffffff,0.7);g.fillCircle(x-3,y-31+bob,1.2);g.fillCircle(x+5,y-31+bob,1.2);
-
-      // Nose — small round Pikachu-style
+      // Nose
       g.fillStyle(0x3a1a04,0.6);g.fillCircle(x,y-26+bob,1.8);
-
       // Smile
       g.fillStyle(0x3a1a04,0.4);g.fillRect(x-3,y-23+bob,6,1.5);
 
-      // Constant cheek-to-cheek arc when still
+      // Static arc between cheeks (dot trail, no lineStyle)
       if(!isMoving&&Math.sin(t*6)>0.5){
-        g.lineStyle(1,0xffee00,0.4+Math.sin(t*8)*0.3);
-        g.lineBetween(x-6,y-25+bob,x+6,y-25+bob);
+        const arcAlpha=0.35+Math.sin(t*8)*0.2;
+        g.fillStyle(0xffee00,arcAlpha);
+        for(let i=0;i<5;i++) g.fillCircle(x-4+i*2,y-25+bob,1);
       }
 
-      // Running spark trail
+      // Running spark trail (deterministic, no random per frame)
       if(isMoving){
-        for(let i=0;i<2;i++){
-          g.fillStyle(0xffee00,0.3+Math.random()*0.3);
-          g.fillCircle(x-f*rnd(10,30)+rnd(-5,5),y-rnd(5,25),rnd(2,4));
-        }
+        const s1=Math.sin(t*12)*12, s2=Math.sin(t*9+1)*10;
+        g.fillStyle(0xffee00,0.35);g.fillCircle(x-f*18+s1,y-10,3);
+        g.fillStyle(0xffee00,0.25);g.fillCircle(x-f*28+s2,y-18,2);
       }
       return;
     }

@@ -904,117 +904,129 @@ class DifficultyScene extends Phaser.Scene {
 class ModeScene extends Phaser.Scene {
   constructor(){super('ModeSelect');}
   create(){
+    // Clean up any stale HTML inputs
+    document.querySelectorAll('.sarnaria-input').forEach(e=>e.remove());
+
     const g=this.add.graphics();
     g.fillStyle(0x06020f,1);g.fillRect(0,0,W,H);
     g.fillStyle(0x1a0a30,0.5);g.fillRoundedRect(60,20,W-120,H-40,12);
     g.lineStyle(1,0xc9a84c,0.4);g.strokeRoundedRect(60,20,W-120,H-40,12);
 
-    this.add.text(W/2,42,'Game Mode',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'20px',color:'#c9a84c'}).setOrigin(0.5);
+    this.add.text(W/2,46,'Game Mode',{
+      fontFamily:"'Cinzel Decorative',cursive",fontSize:'22px',color:'#c9a84c'
+    }).setOrigin(0.5);
 
-    // 1P button
-    const m1x=90,m1y=80,m1w=W/2-110,m1h=80;
-    const b1=this.add.graphics();
-    const s1=!MP.active;
-    b1.fillStyle(s1?0x201040:0x100818,0.95);b1.fillRoundedRect(m1x,m1y,m1w,m1h,8);
-    b1.lineStyle(2,s1?0xc9a84c:0x3a2a5a,1);b1.strokeRoundedRect(m1x,m1y,m1w,m1h,8);
-    this.add.text(m1x+m1w/2,m1y+18,'⚔  Solo',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'16px',color:s1?'#c9a84c':'#6a5a7a'}).setOrigin(0.5);
-    this.add.text(m1x+m1w/2,m1y+44,'One player\nArrow keys + X',{fontFamily:'monospace',fontSize:'10px',color:s1?'#c8b898':'#4a3a5a',align:'center'}).setOrigin(0.5);
-    const z1=this.add.zone(m1x,m1y,m1w,m1h).setOrigin(0).setInteractive();
-    z1.on('pointerdown',()=>{MP.active=false;this.scene.restart();});
+    const isSolo=!MP.active||ONLINE.active;
 
-    // 2P button
-    const m2x=W/2+20,m2y=80,m2w=W/2-110,m2h=80;
-    const b2=this.add.graphics();
-    const s2=MP.active&&!ONLINE.active;
-    b2.fillStyle(s2?0x102040:0x100818,0.95);b2.fillRoundedRect(m2x,m2y,m2w,m2h,8);
-    b2.lineStyle(2,s2?0x40c0ff:0x3a2a5a,1);b2.strokeRoundedRect(m2x,m2y,m2w,m2h,8);
-    this.add.text(m2x+m2w/2,m2y+18,'⚔⚔  Local Co-op',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'14px',color:s2?'#40c0ff':'#6a5a7a'}).setOrigin(0.5);
-    this.add.text(m2x+m2w/2,m2y+44,'Two players\nSame device',{fontFamily:'monospace',fontSize:'10px',color:s2?'#c8e8ff':'#4a3a5a',align:'center'}).setOrigin(0.5);
-    const z2=this.add.zone(m2x,m2y,m2w,m2h).setOrigin(0).setInteractive();
-    z2.on('pointerdown',()=>{MP.active=true;ONLINE.active=false;this.scene.restart();});
+    // ── SOLO ─────────────────────────────────────────────────────────────────
+    const bx=90, bw=(W-220)/2, by=90, bh=100;
+    const soloG=this.add.graphics();
+    soloG.fillStyle(isSolo?0x201040:0x100818,0.95);
+    soloG.fillRoundedRect(bx,by,bw,bh,10);
+    soloG.lineStyle(2,isSolo?0xc9a84c:0x3a2a5a,1);
+    soloG.strokeRoundedRect(bx,by,bw,bh,10);
+    this.add.text(bx+bw/2,by+28,'⚔',{fontSize:'24px'}).setOrigin(0.5);
+    this.add.text(bx+bw/2,by+56,'Solo',{
+      fontFamily:"'Cinzel Decorative',cursive",fontSize:'16px',
+      color:isSolo?'#c9a84c':'#5a4a6a'
+    }).setOrigin(0.5);
+    this.add.text(bx+bw/2,by+76,'One player',{
+      fontFamily:'monospace',fontSize:'10px',color:isSolo?'#c8b898':'#3a2a4a'
+    }).setOrigin(0.5);
+    const z1=this.add.zone(bx,by,bw,bh).setOrigin(0).setInteractive();
+    z1.on('pointerdown',()=>{MP.active=false;ONLINE.active=false;this.scene.restart();});
 
-    // Online button
-    const m3x=80,m3y=175,m3w=W-160,m3h=60;
-    const b3=this.add.graphics();
-    const s3=ONLINE.active;
-    b3.fillStyle(s3?0x102010:0x100818,0.95);b3.fillRoundedRect(m3x,m3y,m3w,m3h,8);
-    b3.lineStyle(2,s3?0x40ff80:0x3a2a5a,1);b3.strokeRoundedRect(m3x,m3y,m3w,m3h,8);
-    this.add.text(m3x+m3w/2,m3y+18,'🌐  Online Multiplayer — Play with Liam or Levi on a different device',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'12px',color:s3?'#40ff80':'#5a7a5a'}).setOrigin(0.5);
-    this.add.text(m3x+m3w/2,m3y+40,'Each player uses their own device. Share a 4-digit room code.',{fontFamily:'monospace',fontSize:'9px',color:s3?'#80c080':'#3a4a3a'}).setOrigin(0.5);
-    const z3=this.add.zone(m3x,m3y,m3w,m3h).setOrigin(0).setInteractive();
-    z3.on('pointerdown',()=>{ document.querySelectorAll('.sarnaria-input').forEach(e=>e.remove()); this.scene.start('OnlineLobby'); });
+    // ── ONLINE MULTIPLAYER ────────────────────────────────────────────────────
+    const ox=bx+bw+40, ow=bw;
+    const onlineG=this.add.graphics();
+    const isOnline=ONLINE.active;
+    onlineG.fillStyle(isOnline?0x102010:0x100818,0.95);
+    onlineG.fillRoundedRect(ox,by,ow,bh,10);
+    onlineG.lineStyle(2,isOnline?0x40ff80:0x3a2a5a,1);
+    onlineG.strokeRoundedRect(ox,by,ow,bh,10);
+    this.add.text(ox+ow/2,by+28,'🌐',{fontSize:'22px'}).setOrigin(0.5);
+    this.add.text(ox+ow/2,by+56,'Online Co-op',{
+      fontFamily:"'Cinzel Decorative',cursive",fontSize:'16px',
+      color:isOnline?'#40ff80':'#3a6a3a'
+    }).setOrigin(0.5);
+    this.add.text(ox+ow/2,by+76,'Different devices',{
+      fontFamily:'monospace',fontSize:'10px',color:isOnline?'#80c080':'#2a4a2a'
+    }).setOrigin(0.5);
+    const z2=this.add.zone(ox,by,ow,bh).setOrigin(0).setInteractive();
+    z2.on('pointerdown',()=>this.scene.start('OnlineLobby'));
 
-    // Controls info
-    const cy=180;
-    if(!MP.active){
-      g.fillStyle(0x100820,0.8);g.fillRoundedRect(90,cy,W-180,80,6);
-      this.add.text(W/2,cy+14,'Player Controls',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'12px',color:'#c9a84c'}).setOrigin(0.5);
-      this.add.text(W/2,cy+34,'Move: ← →    Jump: ↑ or Z    Attack: X    Special: C    Shield: C (with Shield)',{fontFamily:'monospace',fontSize:'10px',color:'#8a7a9a'}).setOrigin(0.5);
-      this.add.text(W/2,cy+52,'Mobile: use on-screen buttons',{fontFamily:'monospace',fontSize:'10px',color:'#5a4a6a'}).setOrigin(0.5);
-    } else {
-      g.fillStyle(0x100820,0.8);g.fillRoundedRect(90,cy,W-180,110,6);
-      this.add.text(W/2,cy+12,'Co-op Controls',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'12px',color:'#40c0ff'}).setOrigin(0.5);
-      this.add.text(90+12,cy+30,'Player 1',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'10px',color:'#c9a84c'});
-      this.add.text(90+12,cy+46,'Move: ← →   Jump: ↑/Z   Attack: X   Special: C',{fontFamily:'monospace',fontSize:'10px',color:'#8a7a9a'});
-      this.add.text(W/2+12,cy+30,'Player 2',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'10px',color:'#40c0ff'});
-      this.add.text(W/2+12,cy+46,'Move: A D   Jump: W   Attack: F   Special: G',{fontFamily:'monospace',fontSize:'10px',color:'#7a9aaa'});
-    }
+    // ── YOUR NAME ─────────────────────────────────────────────────────────────
+    const ny=220;
+    g.fillStyle(0x100820,0.6);g.fillRoundedRect(90,ny,W-180,50,6);
+    this.add.text(W/2,ny+14,'Your Name',{
+      fontFamily:"'Cinzel Decorative',cursive",fontSize:'11px',color:'#c9a84c'
+    }).setOrigin(0.5);
+    this._buildNameInput(ny+28);
 
-    // Username inputs (HTML overlay)
-    this.buildNameInputs(cy+170);
+    // ── CONTROLS REFERENCE ────────────────────────────────────────────────────
+    const ky=292;
+    g.fillStyle(0x100820,0.5);g.fillRoundedRect(90,ky,W-180,100,6);
+    this.add.text(W/2,ky+14,'Controls',{
+      fontFamily:"'Cinzel Decorative',cursive",fontSize:'11px',color:'#c9a84c'
+    }).setOrigin(0.5);
 
-    // Start
+    const ctrlRows=[
+      ['Move','← →  or  A D on-screen'],
+      ['Jump','↑  or  Z  or  ↑ button'],
+      ['Attack','X  or  ⚔ button'],
+      ['Special','Q  or  ✦ button'],
+      ['Superpower','E  or  ★ button'],
+      ['Pause','ESC  or  ⏸ button'],
+    ];
+    ctrlRows.forEach((row,i)=>{
+      const ry=ky+30+i*12;
+      this.add.text(110,ry,row[0]+':',{fontFamily:'monospace',fontSize:'9px',color:'#8a7a6a'});
+      this.add.text(240,ry,row[1],{fontFamily:'monospace',fontSize:'9px',color:'#c8b898'});
+    });
+
+    // ── BEGIN QUEST ───────────────────────────────────────────────────────────
     const sb=this.add.graphics();
-    sb.fillStyle(0x1a3010,0.95);sb.fillRoundedRect(W/2-90,H-44,180,30,6);
-    sb.lineStyle(1,0x40c060,0.9);sb.strokeRoundedRect(W/2-90,H-44,180,30,6);
-    const st=this.add.text(W/2,H-29,'Begin Quest →',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'13px',color:'#40c060'}).setOrigin(0.5);
+    sb.fillStyle(0x1a3010,0.95);sb.fillRoundedRect(W/2-100,H-52,200,34,8);
+    sb.lineStyle(1,0x40c060,0.9);sb.strokeRoundedRect(W/2-100,H-52,200,34,8);
+    const st=this.add.text(W/2,H-35,'Begin Quest  →',{
+      fontFamily:"'Cinzel Decorative',cursive",fontSize:'14px',color:'#40c060'
+    }).setOrigin(0.5);
     this.tweens.add({targets:st,alpha:{from:0.4,to:1},duration:700,yoyo:true,repeat:-1});
-    const sz=this.add.zone(W/2-90,H-44,180,30).setOrigin(0).setInteractive();
+    const sz=this.add.zone(W/2-100,H-52,200,34).setOrigin(0).setInteractive();
     sz.on('pointerdown',()=>this.startGame());
     this.input.keyboard.once('keydown-ENTER',()=>this.startGame());
   }
 
-  buildNameInputs(y){
-    // Clean up old inputs
+  _buildNameInput(y){
     document.querySelectorAll('.sarnaria-input').forEach(e=>e.remove());
     const canvas=this.sys.canvas;
     const rect=canvas.getBoundingClientRect();
     const scaleX=rect.width/W, scaleY=rect.height/H;
-
-    const mkInput=(val,left,top,w,cb)=>{
-      const inp=document.createElement('input');
-      inp.className='sarnaria-input';
-      inp.value=val; inp.maxLength=16;
-      inp.placeholder='Enter name...';
-      Object.assign(inp.style,{
-        position:'absolute',
-        left:`${rect.left+left*scaleX}px`,
-        top:`${rect.top+top*scaleY}px`,
-        width:`${w*scaleX}px`,
-        height:`${24*scaleY}px`,
-        background:'rgba(10,6,24,0.95)',
-        border:'1px solid #5a3d80',
-        color:'#e8dcc8',
-        fontFamily:'monospace',
-        fontSize:`${11*scaleY}px`,
-        padding:'2px 6px',
-        outline:'none',
-        borderRadius:'4px',
-        zIndex:'999',
-      });
-      inp.oninput=()=>cb(inp.value||'Player');
-      document.body.appendChild(inp);
-    };
-
-    if(MP.active){
-      this.add.text(110,y,'P1 Name:',{fontFamily:'monospace',fontSize:'11px',color:'#c9a84c'});
-      mkInput(MP.p1name,160,y,130,(v)=>MP.p1name=v);
-      this.add.text(W/2+10,y,'P2 Name:',{fontFamily:'monospace',fontSize:'11px',color:'#40c0ff'});
-      mkInput(MP.p2name,W/2+68,y,130,(v)=>MP.p2name=v);
-    } else {
-      this.add.text(W/2-140,y,'Your Name:',{fontFamily:'monospace',fontSize:'11px',color:'#c9a84c'});
-      mkInput(MP.p1name,W/2-60,y,160,(v)=>MP.p1name=v);
-    }
+    const inp=document.createElement('input');
+    inp.className='sarnaria-input';
+    inp.value=MP.p1name||'Player 1';
+    inp.maxLength=16;
+    Object.assign(inp.style,{
+      position:'absolute',
+      left:`${rect.left+(W/2-80)*scaleX}px`,
+      top:`${rect.top+y*scaleY}px`,
+      width:`${160*scaleX}px`,
+      height:`${22*scaleY}px`,
+      background:'rgba(10,6,24,0.95)',
+      border:'1px solid #5a3d80',
+      color:'#e8dcc8',
+      fontFamily:'monospace',
+      fontSize:`${12*scaleY}px`,
+      textAlign:'center',
+      padding:'2px 6px',
+      outline:'none',
+      borderRadius:'4px',
+      zIndex:'999',
+    });
+    inp.oninput=()=>{ MP.p1name=inp.value||'Player 1'; };
+    document.body.appendChild(inp);
+    this.events.once('shutdown',()=>inp.remove());
+    this.events.once('destroy',()=>inp.remove());
   }
 
   startGame(){
@@ -1896,12 +1908,17 @@ class GameScene extends Phaser.Scene {
               g.fillCircle(bx+b.w*0.3,fillY+1,2);
               g.fillCircle(bx+b.w*0.7,fillY+2,1.5);
             } else {
-              // Fully charged — bright pulsing glow fill
+              // Fully charged — bright pulsing glow fill (no lineStyle)
               const pulse=0.5+Math.sin(Date.now()*0.005)*0.3;
               g.fillStyle(b.col,0.2+pulse*0.15);
               g.fillRoundedRect(bx,by,b.w,b.h,8);
-              g.lineStyle(2,b.col,0.7+pulse*0.3);
-              g.strokeRoundedRect(bx,by,b.w,b.h,8);
+              // Border via filled rects (no lineStyle)
+              const ba=0.7+pulse*0.3;
+              g.fillStyle(b.col,ba);
+              g.fillRect(bx,by,b.w,2);
+              g.fillRect(bx,by+b.h-2,b.w,2);
+              g.fillRect(bx,by,2,b.h);
+              g.fillRect(bx+b.w-2,by,2,b.h);
             }
           }
         }
@@ -1910,8 +1927,10 @@ class GameScene extends Phaser.Scene {
         if(b.key!=='weapon'&&b.key!=='pause'&&this.vBtn[b.key]){
           g.fillStyle(b.col,0.32);
           g.fillRoundedRect(bx,by,b.w,b.h,8);
-          g.lineStyle(2,b.col,1);
-          g.strokeRoundedRect(bx,by,b.w,b.h,8);
+          // Border via fills, no lineStyle
+          g.fillStyle(b.col,1);
+          g.fillRect(bx,by,b.w,2);g.fillRect(bx,by+b.h-2,b.w,2);
+          g.fillRect(bx,by,2,b.h);g.fillRect(bx+b.w-2,by,2,b.h);
         }
       });
     });

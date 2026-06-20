@@ -1046,30 +1046,31 @@ class SkinScene extends Phaser.Scene {
     this.add.text(W/2,36,'CHOOSE YOUR HERO',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'18px',color:'#c9a84c'}).setOrigin(0.5);
     this.add.text(W/2,58,'You can change skin any time from the shop',{fontFamily:'monospace',fontSize:'10px',color:'#4a3a5a'}).setOrigin(0.5);
 
-    // 6 skin cards
-    const cardW=116,cardH=200,startX=40,cardY=82;
+    // 2 rows of 3 cards
+    const cols=3, cardW=220, cardH=148, gapX=14, gapY=14;
+    const totalW=cols*cardW+(cols-1)*gapX;
+    const startX=Math.floor((W-totalW)/2);
+    const row1Y=74, row2Y=row1Y+cardH+gapY;
+
     this.skinKeys.forEach((key,i)=>{
       const sk=SKINS[key];
-      const cx=startX+i*(cardW+8)+cardW/2;
-      const cy=cardY+cardH/2;
+      const col=i%cols, row=Math.floor(i/cols);
+      const cx=startX+col*(cardW+gapX);
+      const cy=row===0?row1Y:row2Y;
       const isSelected=key===this.selected;
+      const midX=cx+cardW/2, midY=cy+cardH/2;
 
       const card=this.add.graphics();
-      this.drawCard(card,startX+i*(cardW+8),cardY,cardW,cardH,key,isSelected);
+      this.drawCard(card,cx,cy,cardW,cardH,key,isSelected);
 
-      // Preview character in card
       const pg=this.add.graphics();
-      this.drawSkinPreview(pg,cx,cardY+100,sk);
+      this.drawSkinPreview(pg,midX,cy+72,sk);
 
-      this.add.text(cx,cardY+168,sk.name,{fontFamily:"'Cinzel Decorative',cursive",fontSize:'13px',color:isSelected?'#c9a84c':'#8a7a9a'}).setOrigin(0.5);
-      this.add.text(cx,cardY+186,sk.desc,{fontFamily:'monospace',fontSize:'9px',color:'#6a5a7a'}).setOrigin(0.5);
+      this.add.text(midX,cy+118,sk.name,{fontFamily:"'Cinzel Decorative',cursive",fontSize:'12px',color:isSelected?'#c9a84c':'#8a7a9a'}).setOrigin(0.5);
+      this.add.text(midX,cy+134,sk.desc,{fontFamily:'monospace',fontSize:'8px',color:'#5a4a6a',wordWrap:{width:cardW-12}}).setOrigin(0.5);
 
-      // Clickable zone
-      const zone=this.add.zone(startX+i*(cardW+8),cardY,cardW,cardH).setOrigin(0).setInteractive();
-      zone.on('pointerdown',()=>{
-        SAVE.skin=key;
-        this.scene.restart();
-      });
+      const zone=this.add.zone(cx,cy,cardW,cardH).setOrigin(0).setInteractive();
+      zone.on('pointerdown',()=>{ SAVE.skin=key; this.scene.restart(); });
     });
 
     // Start button
@@ -1154,18 +1155,17 @@ class SkinScene extends Phaser.Scene {
       g.fillTriangle(x-5,y-22,x-8,y-36,x-2,y-24);
       g.fillTriangle(x+5,y-22,x+8,y-36,x+2,y-24);
       g.fillStyle(sk.accentCol,0.9);g.fillCircle(x-8,y-37,2);g.fillCircle(x+8,y-37,2);
-      // Cheek patches — glowing
+      // Cheek patches
       g.fillStyle(0xff2020,0.85);g.fillCircle(x-5,y-16,4);g.fillCircle(x+5,y-16,4);
-      g.fillStyle(0xff6060,0.4);g.fillCircle(x-5,y-16,6);g.fillCircle(x+5,y-16,6);
-      // Lightning bolt emblem on chest
+      g.fillStyle(0xff6060,0.35);g.fillCircle(x-5,y-16,6);g.fillCircle(x+5,y-16,6);
+      // Lightning bolt on chest
       g.fillStyle(sk.accentCol,0.9);
       g.fillTriangle(x-1,y-6,x+3,y-6,x+1,y-2);
       g.fillTriangle(x-2,y-2,x+2,y-2,x,y+2);
-      // Zigzag tail
-      g.lineStyle(3,sk.bodyCol,0.9);
-      g.lineBetween(x-5,y+8,x-9,y+3);
-      g.lineBetween(x-9,y+3,x-5,y-1);
-      g.lineBetween(x-5,y-1,x-11,y-5);
+      // Zigzag tail — filled triangles, no lineBetween
+      g.fillStyle(sk.bodyCol,0.9);
+      g.fillTriangle(x-5,y+8,x-9,y+3,x-3,y+2);
+      g.fillTriangle(x-9,y+3,x-5,y-1,x-11,y-1);
       g.fillStyle(sk.hairCol,1);g.fillCircle(x-11,y-5,3);
     }
   }
@@ -1303,9 +1303,9 @@ class ShopScene extends Phaser.Scene {
         box.fillStyle(0x1a0808,0.9);box.fillRect(ix,iy,iw-6,ih-4);
         box.lineStyle(1,0x4a1818,0.8);box.strokeRect(ix,iy,iw-6,ih-4);
         // Red X overlay
-        box.lineStyle(1,0x6a1a1a,0.3);
-        box.lineBetween(ix,iy,ix+iw-6,iy+ih-4);
-        box.lineBetween(ix+iw-6,iy,ix,iy+ih-4);
+        box.fillStyle(0x6a1a1a,0.3);
+        box.fillRect(ix,iy,iw-6,2);
+        box.fillRect(ix,iy+ih-6,iw-6,2);
       }
 
       this.add.text(ix+8,iy+5,item.name,{fontFamily:'monospace',fontSize:'12px',color:owned?'#60ff60':canAfford?'#e8dcc8':'#5a3030'});
@@ -3125,16 +3125,19 @@ class GameScene extends Phaser.Scene {
       this.rainDrops.forEach(r=>{
         r.x+=r.vx;r.y+=r.vy;
         if(r.y>H){r.y=-rnd(0,40);r.x=rnd(0,W);}
-        g.lineStyle(1,0x80c0ff,r.alpha);
-        g.lineBetween(r.x,r.y,r.x+r.vx*2,r.y+r.vy*2);
+        // Filled rect instead of lineBetween
+        g.fillStyle(0x80c0ff,r.alpha);
+        g.fillRect(r.x,r.y,1,r.len);
       });
       if(Math.random()<0.002){g.fillStyle(0xffffff,0.04);g.fillRect(0,0,W,H);}
     }
     if(bg==='mountain'||bg==='peak'){
       if(Math.random()<0.15){
         const gx=rnd(0,W),gy=rnd(20,H*0.5);
-        g.lineStyle(1,0xc0d8ff,0.05+Math.random()*0.04);
-        g.lineBetween(gx,gy,gx+rnd(30,80),gy+rnd(-4,4));
+        const gw=rnd(30,80);
+        g.fillStyle(0xc0d8ff,0.04+Math.random()*0.03);
+        g.fillRect(gx,gy,gw,1);
+        g.fillRect(gx+4,gy+3,gw-8,1);
       }
     }
   }
@@ -3295,10 +3298,10 @@ class GameScene extends Phaser.Scene {
         // Dragon teeth
         g.fillStyle(0xf0f0e0,0.9);
         for(let ti=0;ti<3;ti++) g.fillTriangle(x+player.dir*(34+ti*4),y-2,x+player.dir*(33+ti*4),y-2,x+player.dir*(33.5+ti*4),y+3);
-        // Whiskers — long, flowing
-        g.lineStyle(1,0xf0d0a0,0.8);
-        g.lineBetween(x+player.dir*40,y-5,x+player.dir*56,y-16+Math.sin(t*2)*4);
-        g.lineBetween(x+player.dir*40,y-3,x+player.dir*54,y-8+Math.sin(t*2+0.5)*3);
+        // Dragon whiskers — thin filled rects
+        g.fillStyle(0xf0d0a0,0.7);
+        g.fillRect(x+player.dir*40,y-5,player.dir*16,1);
+        g.fillRect(x+player.dir*40,y-3,player.dir*14,1);
         // Mane spikes along neck
         g.fillStyle(0xff4400,0.75);
         for(let mi=0;mi<4;mi++){
@@ -3316,10 +3319,9 @@ class GameScene extends Phaser.Scene {
           g.fillTriangle(x,y-4,x-player.dir*10,y-40,x+player.dir*20,y);
           g.fillTriangle(x,y-4,x-player.dir*20,y-50,x-player.dir*5,y+5);
           g.fillStyle(0x8a2010,0.5);
-          g.lineBetween&&null;
-          g.lineStyle(1,0xc03010,0.4);
-          g.lineBetween(x-player.dir*10,y-40,x+player.dir*20,y);
-          g.lineBetween(x-player.dir*20,y-50,x-player.dir*5,y+5);
+          g.fillStyle(0xc03010,0.4);
+          g.fillRect(Math.min(x-player.dir*10,x+player.dir*20)-1,y-40,3,40);
+          g.fillRect(Math.min(x-player.dir*20,x-player.dir*5)-1,y-50,3,55);
         } else {
           // Wings folded
           g.fillStyle(0x8a2010,0.7);
@@ -3411,11 +3413,11 @@ class GameScene extends Phaser.Scene {
         g.fillStyle(0xe0c090,0.6);g.fillEllipse(x+player.dir*32,y-3,12,9);
         // Nose
         g.fillStyle(0xd06070,0.9);g.fillEllipse(x+player.dir*32,y-5,5,4);
-        // Whiskers
-        g.lineStyle(1,0xf0f0e0,0.6);
-        g.lineBetween(x+player.dir*28,y-3,x+player.dir*14,y-5);
-        g.lineBetween(x+player.dir*28,y-1,x+player.dir*14,y+1);
-        g.lineBetween(x+player.dir*28,y+1,x+player.dir*14,y+3);
+        // Whiskers — thin filled rects
+        g.fillStyle(0xf0f0e0,0.5);
+        g.fillRect(x+player.dir*28,y-4,player.dir*16,1);
+        g.fillRect(x+player.dir*28,y-1,player.dir*14,1);
+        g.fillRect(x+player.dir*28,y+2,player.dir*14,1);
         // Eyes — feline slit pupils
         g.fillStyle(0xffcc20,1);g.fillEllipse(x+player.dir*27,y-6,7,5);g.fillEllipse(x+player.dir*33,y-6,7,5);
         g.fillStyle(0x000000,1);g.fillRect(x+player.dir*26,y-8,player.dir*2,6);g.fillRect(x+player.dir*32,y-8,player.dir*2,6);
@@ -4149,11 +4151,14 @@ class GameScene extends Phaser.Scene {
     if(p.atk){
       if(SAVE.weapon==='bow'){
         g.fillRect(x,y-14,f*20,4);
-        g.lineStyle(3,0x806020,1);
-        g.beginPath();g.moveTo(x+f*22,y-28);g.lineTo(x+f*18,y-14);g.lineTo(x+f*22,y-2);g.strokePath();
-        g.lineStyle(1,0xe0d080,0.9);
-        g.lineBetween(x+f*22,y-28,x+f*14,y-14);g.lineBetween(x+f*14,y-14,x+f*22,y-2);
-        g.lineStyle(2,0xc0a030,1);g.lineBetween(x+f*8,y-14,x+f*30,y-14);
+        // Bow shape — filled arc via triangles
+        g.fillStyle(0x806020,1);
+        g.fillTriangle(x+f*22,y-28,x+f*19,y-26,x+f*18,y-14);
+        g.fillTriangle(x+f*22,y-2,x+f*19,y-4,x+f*18,y-14);
+        // Bow string — thin rect
+        g.fillStyle(0xe0d080,0.8);g.fillRect(x+f*14,y-28,f*1,26);
+        // Arrow
+        g.fillStyle(0xc0a030,1);g.fillRect(x+f*8,y-15,f*22,2);
         g.fillStyle(0xd0c060,1);g.fillTriangle(x+f*30,y-14,x+f*24,y-17,x+f*24,y-11);
         g.fillStyle(0xa06020,0.8);
         g.fillTriangle(x+f*8,y-14,x+f*12,y-18,x+f*14,y-14);
@@ -4165,7 +4170,8 @@ class GameScene extends Phaser.Scene {
         g.fillTriangle(x+f*16,y-30,x+f*34,y-26,x+f*16,y-12);
         g.fillTriangle(x+f*16,y-16,x+f*30,y-8,x+f*16,y-10);
         g.fillStyle(0x808898,1);g.fillTriangle(x+f*16,y-28,x+f*10,y-24,x+f*16,y-20);
-        g.lineStyle(1,0xd0e0f0,0.8);g.lineBetween(x+f*34,y-26,x+f*30,y-8);
+        // Edge highlight — thin fillRect
+        g.fillStyle(0xd0e0f0,0.6);g.fillRect(x+f*30,y-26,f*2,18);
         if(p.atkHeld>0){
           const ch=Math.min(1,p.atkHeld/0.5);
           g.fillStyle(0xffd060,ch*0.4);g.fillCircle(x+f*24,y-20,12*ch);
@@ -4176,8 +4182,7 @@ class GameScene extends Phaser.Scene {
         g.fillStyle(0x6040a0,1);g.fillRect(x+f*16,y-34,f*3,32);
         g.fillStyle(0x8040ff,0.9);g.fillCircle(x+f*18,y-36,9);
         g.fillStyle(0xc080ff,0.6);g.fillCircle(x+f*17,y-38,5);
-        g.lineStyle(1,0xaa60ff,0.5);g.strokeCircle(x+f*18,y-36,14);
-        g.fillStyle(0xaa40ff,0.25);g.fillCircle(x+f*18,y-36,18);
+        g.fillStyle(0xaa40ff,0.2);g.fillCircle(x+f*18,y-36,16);
       } else {
         g.fillRect(x,y-14,f*22,5);
         g.fillStyle(0x8090b0,1);g.fillRect(x+f*16,y-28,f*3,24);
@@ -4187,11 +4192,13 @@ class GameScene extends Phaser.Scene {
     } else {
       g.fillRect(x-18,y-14,10,4);g.fillRect(x+8,y-14,10,4);
       if(SAVE.weapon==='bow'){
-        g.lineStyle(3,0x806020,0.9);
-        g.beginPath();g.moveTo(x+f*10,y-24);g.lineTo(x+f*8,y-12);g.lineTo(x+f*10,y-2);g.strokePath();
-        g.lineStyle(1,0xe0d080,0.6);
-        g.lineBetween(x+f*10,y-24,x+f*4,y-13);g.lineBetween(x+f*4,y-13,x+f*10,y-2);
-        g.lineStyle(2,0xc0a030,0.6);g.lineBetween(x-f*4,y-28,x-f*4,y-10);
+        // Bow resting — small arc shape via triangles
+        g.fillStyle(0x806020,0.85);
+        g.fillTriangle(x+f*10,y-24,x+f*8,y-22,x+f*8,y-14);
+        g.fillTriangle(x+f*10,y-2,x+f*8,y-4,x+f*8,y-14);
+        g.fillStyle(0xe0d080,0.6);g.fillRect(x+f*4,y-24,f*1,22);
+        // Quiver arrow hint
+        g.fillStyle(0xc0a030,0.6);g.fillRect(x-f*4,y-28,f*1,18);
         g.fillStyle(0xd0c060,0.7);g.fillTriangle(x-f*4,y-10,x-f*7,y-14,x-f*1,y-14);
       } else if(SAVE.weapon==='axe'){
         if(p.axeThrown){
@@ -4202,11 +4209,10 @@ class GameScene extends Phaser.Scene {
           g.fillTriangle(x+f*9,y-28,x+f*24,y-25,x+f*9,y-16);
           g.fillTriangle(x+f*9,y-20,x+f*20,y-13,x+f*9,y-14);
           g.fillStyle(0x808898,1);g.fillTriangle(x+f*9,y-26,x+f*4,y-22,x+f*9,y-18);
-          g.lineStyle(1,0xd0e0f0,0.6);g.lineBetween(x+f*24,y-25,x+f*20,y-13);
+          g.fillStyle(0xd0e0f0,0.5);g.fillRect(x+f*22,y-25,f*2,12);
           if(p.atkHeld>0){
             const ch=Math.min(1,p.atkHeld/0.5);
             g.fillStyle(0xffd060,ch*0.3+0.1);g.fillCircle(x+f*14,y-22,10*ch+4);
-            this.showDmgNum&&ch>0.8&&Math.floor(this.t*6)%6===0?null:null;
           }
         }
       } else if(SAVE.weapon==='staff'){
@@ -4695,17 +4701,23 @@ class GameScene extends Phaser.Scene {
         // Body segments
         g.fillCircle(x,y-10,22); // abdomen
         g.fillCircle(x,y-38,14); // thorax
-        // Spider legs (8 legs)
+        // Spider legs — filled rect segments instead of lineBetween
         for(let i=0;i<4;i++){
           const la=(-0.6+i*0.4)+Math.sin(this.t*3+i)*0.2;
           const lr=50+Math.sin(i)*10;
-          // Left legs
-          g.lineStyle(3,0x300860,1);
-          g.lineBetween(x-14,y-30, x-14-Math.cos(la)*lr*0.5, y-30+Math.sin(la)*lr*0.3);
-          g.lineBetween(x-14-Math.cos(la)*lr*0.5, y-30+Math.sin(la)*lr*0.3, x-14-Math.cos(la)*lr, y-30+Math.sin(la)*lr);
-          // Right legs
-          g.lineBetween(x+14,y-30, x+14+Math.cos(la)*lr*0.5, y-30+Math.sin(la)*lr*0.3);
-          g.lineBetween(x+14+Math.cos(la)*lr*0.5, y-30+Math.sin(la)*lr*0.3, x+14+Math.cos(la)*lr, y-30+Math.sin(la)*lr);
+          g.fillStyle(0x300860,0.9);
+          // Left leg upper
+          const llx1=x-14, lly1=y-30;
+          const llx2=llx1-Math.cos(la)*lr*0.5, lly2=lly1+Math.sin(la)*lr*0.3;
+          const llx3=llx1-Math.cos(la)*lr, lly3=lly1+Math.sin(la)*lr;
+          g.fillTriangle(llx1-2,lly1,llx1+2,lly1,llx2,lly2);
+          g.fillTriangle(llx2-2,lly2,llx2+2,lly2,llx3,lly3);
+          // Right leg upper
+          const rlx1=x+14;
+          const rlx2=rlx1+Math.cos(la)*lr*0.5, rly2=lly1+Math.sin(la)*lr*0.3;
+          const rlx3=rlx1+Math.cos(la)*lr, rly3=lly1+Math.sin(la)*lr;
+          g.fillTriangle(rlx1-2,lly1,rlx1+2,lly1,rlx2,rly2);
+          g.fillTriangle(rlx2-2,rly2,rlx2+2,rly2,rlx3,rly3);
         }
         // Abdomen markings
         g.fillStyle(0xff0080,0.8);
@@ -4723,7 +4735,7 @@ class GameScene extends Phaser.Scene {
         g.fillCircle(x-8,y-22+pulse*4,3);g.fillCircle(x+8,y-22+pulse*4,3);
         // Web silk from abdomen
         g.lineStyle(1,0xffffff,0.2);
-        for(let i=0;i<3;i++) g.lineBetween(x+rnd(-8,8),y+10,x+rnd(-30,30),y+40);
+        for(let i=0;i<3;i++){g.fillStyle(0xffffff,0.15);g.fillRect(x+rnd(-8,8),y+10,1,rnd(20,40));}
         break;
       }
 
@@ -4987,13 +4999,11 @@ class GameScene extends Phaser.Scene {
     }
 
     // Axe shape rotated
-    // Handle
-    const hx1=x+cos*-16,hy1=y+sin*-16;
-    const hx2=x+cos*10, hy2=y+sin*10;
-    g.lineStyle(4,0x6a3a10,1);
-    g.lineBetween(hx1,hy1,hx2,hy2);
+    // Handle — filled rect approximation
+    g.fillStyle(0x6a3a10,1);
+    g.fillTriangle(hx1-sin*2,hy1+cos*2, hx1+sin*2,hy1-cos*2, hx2,hy2);
 
-    // Blade — crescent shape built from 3 points rotated
+    // Blade
     const bPerp={x:-sin,y:cos};
     const tipX=x+cos*14,tipY=y+sin*14;
     const backX=x+cos*4, backY=y+sin*4;
@@ -5003,10 +5013,9 @@ class GameScene extends Phaser.Scene {
     g.fillStyle(0xa0b0c0,1);
     g.fillTriangle(tipX,tipY,edgeX,edgeY,backX,backY);
     g.fillTriangle(edgeX,edgeY,backX,backY,beardX,beardY);
-    // Blade edge highlight
-    g.lineStyle(2,0xd0e0f0,0.7);
-    g.lineBetween(tipX,tipY,edgeX,edgeY);
-    g.lineBetween(edgeX,edgeY,beardX,beardY);
+    // Edge highlight as thin triangle
+    g.fillStyle(0xd0e0f0,0.5);
+    g.fillTriangle(tipX,tipY,edgeX,edgeY,edgeX-bPerp.x*2,edgeY-bPerp.y*2);
 
     // Return glow when homing
     if(ax.returning){
@@ -5215,8 +5224,9 @@ class GameScene extends Phaser.Scene {
       const vx=(i*155+cx*0.7)%this.worldW;
       const vl=H*0.15+Math.sin(i*0.8)*H*0.12;
       const sway=Math.sin(t*0.6+i)*8;
-      g.lineStyle(2,deep?0x083008:0x104010,0.5);
-      g.lineBetween(vx+sway,0,vx,vl);
+      // Vine as thin fillRect
+      g.fillStyle(deep?0x083008:0x104010,0.4);
+      g.fillRect(vx+sway-1,0,2,vl);
       // Leaf clusters on vine
       g.fillStyle(deep?0x0a2808:0x1a4010,0.7);
       g.fillEllipse(vx+sway,vl*0.5,14,10);
@@ -5552,7 +5562,7 @@ class DeathScene extends Phaser.Scene {
     bg.fillStyle(0x000000,0.97);bg.fillRect(0,0,W,H);
     // Red dramatic top
     bg.fillStyle(0x1a0000,1);bg.fillRect(0,0,W,H*0.38);
-    bg.lineStyle(2,0x600000,0.7);bg.lineBetween(0,H*0.38,W,H*0.38);
+    bg.fillStyle(0x600000,0.6);bg.fillRect(0,H*0.38,W,2);
 
     this.add.text(W/2,H*0.1,'YOU FELL',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'44px',color:'#e03030',stroke:'#600000',strokeThickness:4,shadow:{x:0,y:0,color:'#e03030',blur:30,fill:true}}).setOrigin(0.5);
     this.add.text(W/2,H*0.24,`Score: ${SAVE.score}`,{fontFamily:'monospace',fontSize:'16px',color:'#c9a84c'}).setOrigin(0.5);

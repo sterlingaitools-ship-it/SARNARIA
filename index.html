@@ -1038,13 +1038,18 @@ class SkinScene extends Phaser.Scene {
   }
 
   buildUI(){
-    const g=this.bg;
+    // Clear previous UI if rebuilding
+    if(this._uiGroup) this._uiGroup.forEach(o=>{ try{o.destroy();}catch(e){} });
+    this._uiGroup=[];
+    const _add=(o)=>{ this._uiGroup.push(o); return o; };
+
+    const g=this.bg; g.clear();
     g.fillStyle(0x06020f,1);g.fillRect(0,0,W,H);
     g.fillStyle(0x1a0a30,0.5);g.fillRect(40,20,W-80,H-40);
     g.lineStyle(1,0xc9a84c,0.4);g.strokeRect(40,20,W-80,H-40);
 
-    this.add.text(W/2,36,'CHOOSE YOUR HERO',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'18px',color:'#c9a84c'}).setOrigin(0.5);
-    this.add.text(W/2,58,'You can change skin any time from the shop',{fontFamily:'monospace',fontSize:'10px',color:'#4a3a5a'}).setOrigin(0.5);
+    _add(this.add.text(W/2,36,'CHOOSE YOUR HERO',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'18px',color:'#c9a84c'}).setOrigin(0.5));
+    _add(this.add.text(W/2,58,'You can change skin any time from the shop',{fontFamily:'monospace',fontSize:'10px',color:'#4a3a5a'}).setOrigin(0.5));
 
     // 2 rows of 3 cards
     const cols=3, cardW=220, cardH=148, gapX=14, gapY=14;
@@ -1058,31 +1063,43 @@ class SkinScene extends Phaser.Scene {
       const cx=startX+col*(cardW+gapX);
       const cy=row===0?row1Y:row2Y;
       const isSelected=key===this.selected;
-      const midX=cx+cardW/2, midY=cy+cardH/2;
+      const midX=cx+cardW/2;
 
-      const card=this.add.graphics();
+      const card=_add(this.add.graphics());
       this.drawCard(card,cx,cy,cardW,cardH,key,isSelected);
 
-      const pg=this.add.graphics();
-      this.drawSkinPreview(pg,midX,cy+72,sk);
+      const pg=_add(this.add.graphics());
+      this.drawSkinPreview(pg,midX,cy+60,sk);
 
-      this.add.text(midX,cy+118,sk.name,{fontFamily:"'Cinzel Decorative',cursive",fontSize:'12px',color:isSelected?'#c9a84c':'#8a7a9a'}).setOrigin(0.5);
-      this.add.text(midX,cy+134,sk.desc,{fontFamily:'monospace',fontSize:'8px',color:'#5a4a6a',wordWrap:{width:cardW-12}}).setOrigin(0.5);
+      _add(this.add.text(midX,cy+106,sk.name,{fontFamily:"'Cinzel Decorative',cursive",fontSize:'12px',color:isSelected?'#c9a84c':'#8a7a9a'}).setOrigin(0.5));
+      _add(this.add.text(midX,cy+122,sk.desc,{fontFamily:'monospace',fontSize:'8px',color:'#5a4a6a',wordWrap:{width:cardW-12}}).setOrigin(0.5));
 
-      const zone=this.add.zone(cx,cy,cardW,cardH).setOrigin(0).setInteractive();
-      zone.on('pointerdown',()=>{ SAVE.skin=key; this.scene.restart(); });
+      // Special highlight for selected card
+      if(isSelected){
+        _add(this.add.text(midX,cy+136,'✓ Selected',{fontFamily:'monospace',fontSize:'8px',color:'#40c060'}).setOrigin(0.5));
+      }
+
+      const zone=_add(this.add.zone(cx,cy,cardW,cardH).setOrigin(0).setInteractive());
+      zone.on('pointerdown',()=>{
+        if(SAVE.skin===key) return; // already selected, no redraw needed
+        SAVE.skin=key;
+        this.selected=key;
+        // Lightweight redraw — no scene restart
+        this.buildUI();
+      });
     });
 
     // Start button
-    const startBox=this.add.graphics();
-    startBox.fillStyle(0x1a3010,0.95);startBox.fillRect(W/2-90,H-46,180,30);
-    startBox.lineStyle(1,0x40c060,0.9);startBox.strokeRect(W/2-90,H-46,180,30);
-    const st=this.add.text(W/2,H-31,'BEGIN QUEST  →',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'13px',color:'#40c060'}).setOrigin(0.5);
+    const startBox=_add(this.add.graphics());
+    startBox.fillStyle(0x1a3010,0.95);startBox.fillRect(W/2-90,H-44,180,30);
+    startBox.lineStyle(1,0x40c060,0.9);startBox.strokeRect(W/2-90,H-44,180,30);
+    const st=_add(this.add.text(W/2,H-29,'BEGIN QUEST  →',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'13px',color:'#40c060'}).setOrigin(0.5));
     this.tweens.add({targets:st,alpha:{from:0.4,to:1},duration:700,yoyo:true,repeat:-1});
-    const sz=this.add.zone(W/2-90,H-46,180,30).setOrigin(0).setInteractive();
+    const sz=_add(this.add.zone(W/2-90,H-44,180,30).setOrigin(0).setInteractive());
     sz.on('pointerdown',()=>this.scene.start('Game',{level:0}));
     this.input.keyboard.once('keydown-ENTER',()=>this.scene.start('Game',{level:0}));
-    this.input.keyboard.once('keydown-SPACE',()=>this.scene.start('Game',{level:0}));  }
+    this.input.keyboard.once('keydown-SPACE',()=>this.scene.start('Game',{level:0}));
+  }
 
   drawCard(g,x,y,w,h,key,selected){
     const sk=SKINS[key];

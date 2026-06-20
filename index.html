@@ -3,8 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>Sarnaria: Heart of the Forest</title>
+<title>Sonaria: Heart of the Forest</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.60.0/phaser.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@400;700&display=swap" rel="stylesheet">
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
@@ -26,6 +27,83 @@ canvas { display:block; touch-action:none; }
 <div id="game-container">
   <button id="mute-btn" onclick="toggleMute()" title="Toggle Sound">🔊</button></div>
 <script>
+// ── ONLINE MULTIPLAYER ────────────────────────────────────────────────────────
+// Uses Supabase Realtime (free tier, no server needed)
+// Players share a 4-digit room code. Host is P1, joiner is P2.
+const SUPABASE_URL = 'https://utcmdkdlkixubqgxkceg.supabase.co/';  // REPLACE with your Supabase URL
+const SUPABASE_KEY = 'sb_publishable_nl7Ojm1L_LQAieLRf5FfIQ_ac_Uhga4';                      // REPLACE with your anon key
+
+const ONLINE = {
+  active: false,
+  isHost: false,
+  roomCode: null,
+  channel: null,
+  client: null,
+  remotePlayer: null,  // Remote player state received from network
+  lastSent: 0,
+
+  init(){
+    if(typeof window.supabase === 'undefined') return false;
+    this.client = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    return true;
+  },
+
+  genCode(){
+    return Math.floor(1000+Math.random()*9000).toString();
+  },
+
+  async host(code, onJoin, onState, onDisconnect){
+    if(!this.client) return false;
+    this.roomCode = code;
+    this.isHost = true;
+    this.channel = this.client.channel(`sonaria-${code}`, {
+      config: { broadcast: { self: false } }
+    });
+    this.channel
+      .on('broadcast', { event: 'join' }, ()=> onJoin && onJoin())
+      .on('broadcast', { event: 'state' }, ({ payload }) => onState && onState(payload))
+      .on('broadcast', { event: 'leave' }, ()=> onDisconnect && onDisconnect())
+      .subscribe();
+    return true;
+  },
+
+  async join(code, onState, onDisconnect){
+    if(!this.client) return false;
+    this.roomCode = code;
+    this.isHost = false;
+    this.channel = this.client.channel(`sonaria-${code}`, {
+      config: { broadcast: { self: false } }
+    });
+    this.channel
+      .on('broadcast', { event: 'state' }, ({ payload }) => onState && onState(payload))
+      .on('broadcast', { event: 'leave' }, ()=> onDisconnect && onDisconnect())
+      .subscribe(async (status) => {
+        if(status === 'SUBSCRIBED'){
+          await this.channel.send({ type:'broadcast', event:'join', payload:{} });
+        }
+      });
+    return true;
+  },
+
+  send(data){
+    if(!this.channel || !this.active) return;
+    const now = Date.now();
+    if(now - this.lastSent < 50) return; // max 20 sends/sec
+    this.lastSent = now;
+    this.channel.send({ type:'broadcast', event:'state', payload: data });
+  },
+
+  async leave(){
+    if(this.channel){
+      await this.channel.send({ type:'broadcast', event:'leave', payload:{} });
+      this.client.removeChannel(this.channel);
+    }
+    this.active = false;
+    this.channel = null;
+    this.remotePlayer = null;
+  }
+};
+
 const W=800, H=480;
 
 // ── DIFFICULTY ────────────────────────────────────────────────────────────────
@@ -33,7 +111,7 @@ const DIFFICULTY = {
   peaceful: { name:'Peaceful',   enemyHpMult:0.6, enemyDmgMult:0.5, bossHpMult:0.6, bossAggrMult:0.7, enrage:false },
   normal:   { name:'Normal',     enemyHpMult:1.0, enemyDmgMult:1.0, bossHpMult:1.0, bossAggrMult:1.0, enrage:false },
   hard:     { name:'Hard',       enemyHpMult:1.3, enemyDmgMult:1.3, bossHpMult:1.4, bossAggrMult:1.3, enrage:true  },
-  sarnaria: { name:'Sarnaria',   enemyHpMult:1.8, enemyDmgMult:1.6, bossHpMult:2.0, bossAggrMult:1.8, enrage:true  },
+  sarnaria: { name:'Sonaria',   enemyHpMult:1.8, enemyDmgMult:1.6, bossHpMult:2.0, bossAggrMult:1.8, enrage:true  },
 };
 
 // ── SPECIAL MOVES ─────────────────────────────────────────────────────────────
@@ -47,16 +125,16 @@ const SPECIALS = {
 // ── STORY BEATS ───────────────────────────────────────────────────────────────
 const STORY_BEATS = {
   intro: [
-    'Long ago, in the mythical kingdom of Sarnaria...',
+    'Long ago, in the mythical kingdom of Sonaria...',
     'Beautiful creatures lived in harmony under King Roar — half lion, half eagle, half fish.',
     'Dragons soared the sky. Krakens ruled the deep. Mermaids sang without end.',
     'But Roar\'s brother Stefano grew jealous. He stole the Heart of the Forest.',
-    'Without it, all of Sarnaria bends to his dark will.',
+    'Without it, all of Sonaria bends to his dark will.',
     'Far away, in a little cottage, a boy named Alvano\'s mother fell gravely ill.',
     'One cure exists — a magical flower at the peak of Iska mountain.',
     'The same mountain where Stefano hides.',
     'Two quests. One road. One week.',
-    'The fate of Sarnaria — and your mother — rests with you.',
+    'The fate of Sonaria — and your mother — rests with you.',
   ],
   bossDefeated: {
     forestOgre:   'The Forest Ogre falls. The trees sigh with relief. King Roar\'s voice echoes: "Well done, brave one."',
@@ -76,7 +154,7 @@ const STORY_BEATS = {
     '"The forest remembers you. Rise again." — King Roar',
     '"A hero is not one who never falls. Rise." — Ancient Scroll',
     '"Your mother waits. Do not give up now." — The Forest',
-    '"Stefano will not rest. Neither should you." — Sarnaria',
+    '"Stefano will not rest. Neither should you." — Sonaria',
     '"Every wound is a lesson. Learn it." — Ignar the Dragon',
   ],
 };
@@ -92,9 +170,9 @@ const MP = {
 let audioCtx=null;
 let masterGain=null;
 let audioMuted=false;
+let audioReady=false; // true once context confirmed running
 
 function initAudio(){
-  // Must be called directly inside a click/touch handler
   if(audioCtx) return;
   try{
     const AC=window.AudioContext||window.webkitAudioContext;
@@ -102,20 +180,30 @@ function initAudio(){
     masterGain=audioCtx.createGain();
     masterGain.gain.value=0.55;
     masterGain.connect(audioCtx.destination);
-    // Immediately resume (Chrome requires this)
-    if(audioCtx.state==='suspended') audioCtx.resume();
-    // Unlock with a real silent sound
-    const buf=audioCtx.createBuffer(1,1,22050);
-    const src=audioCtx.createBufferSource();
-    src.buffer=buf;
-    src.connect(masterGain);
-    src.start(0);
+    // Resume is async — chain off the promise
+    const doUnlock=()=>{
+      audioReady=true;
+      // Play a real audible test tone so user knows it's working
+      try{
+        const o=audioCtx.createOscillator(),g=audioCtx.createGain();
+        o.connect(g);g.connect(masterGain);
+        o.frequency.value=440;g.gain.value=0.06;
+        o.start();o.stop(audioCtx.currentTime+0.08);
+      }catch(e){}
+    };
+    if(audioCtx.state==='suspended'){
+      audioCtx.resume().then(doUnlock).catch(e=>console.warn('resume failed',e));
+    } else {
+      doUnlock();
+    }
   }catch(e){ console.warn('Audio init failed:',e); }
 }
 
 function ensureAudio(){
   if(!audioCtx) return;
-  if(audioCtx.state==='suspended') audioCtx.resume().catch(()=>{});
+  if(audioCtx.state==='suspended'){
+    audioCtx.resume().then(()=>{ audioReady=true; }).catch(()=>{});
+  }
 }
 
 function toggleMute(){
@@ -126,7 +214,9 @@ function toggleMute(){
 }
 
 function playTone(freq,dur,type='sine',vol=0.12,attack=0.01){
-  if(audioMuted||!audioCtx||audioCtx.state!=='running') return;
+  if(audioMuted||!audioCtx||!audioReady) return;
+  // Auto-resume if something suspended it
+  if(audioCtx.state==='suspended') audioCtx.resume().catch(()=>{});
   try{
     const o=audioCtx.createOscillator(),g=audioCtx.createGain();
     o.connect(g);g.connect(masterGain);
@@ -141,7 +231,8 @@ function playTone(freq,dur,type='sine',vol=0.12,attack=0.01){
 }
 
 function playNoise(dur,vol=0.08,freq=800){
-  if(audioMuted||!audioCtx||audioCtx.state!=='running') return;
+  if(audioMuted||!audioCtx||!audioReady) return;
+  if(audioCtx.state==='suspended') audioCtx.resume().catch(()=>{});
   try{
     const sr=audioCtx.sampleRate;
     const buf=audioCtx.createBuffer(1,Math.max(1,Math.floor(sr*dur)),sr);
@@ -192,8 +283,8 @@ function playAmbient(bg){
   stopAmbient();
   if(audioMuted) return;
   const _try=(attempt)=>{
-    if(!audioCtx||audioCtx.state!=='running'){
-      if(attempt<8) setTimeout(()=>_try(attempt+1),400);
+    if(!audioCtx||!audioReady){
+      if(attempt<12) setTimeout(()=>_try(attempt+1),500);
       return;
     }
     try{
@@ -371,35 +462,35 @@ function getDayTint(){
 
 // ── LEVEL CONFIGS ─────────────────────────────────────────────────────────────
 const LEVELS = [
-  { name:'The Forest of Sarnaria', chapter:'I',   bg:'forest',   platCol:0x2a4a20, platTop:0x40ff40,
+  { name:'The Forest of Sonaria', chapter:'1',   bg:'forest',   platCol:0x2a4a20, platTop:0x40ff40,
     enemies:[{type:'soldier',count:6},{type:'ogre',count:2}],
     boss:{type:'forestOgre',name:'The Forest Ogre',hp:90},
     portalColor:0x40ff80, xpReward:30 },
-  { name:'The Ocean Crossing',     chapter:'II',  bg:'ocean',    platCol:0x1a3a50, platTop:0x40a0ff,
+  { name:'The Ocean Crossing',     chapter:'2',  bg:'ocean',    platCol:0x1a3a50, platTop:0x40a0ff,
     enemies:[{type:'kraken',count:6},{type:'siren',count:3}],
     boss:{type:'kraken',name:'The Great Kraken',hp:130},
     portalColor:0x40c0ff, xpReward:50 },
-  { name:'The River of Sarnaria',  chapter:'III', bg:'river',    platCol:0x1a3a18, platTop:0x60c040,
+  { name:'The River of Sonaria',  chapter:'3', bg:'river',    platCol:0x1a3a18, platTop:0x60c040,
     enemies:[{type:'soldier',count:5},{type:'kraken',count:3},{type:'siren',count:2}],
     boss:{type:'riverSerpent',name:'The River Serpent',hp:140},
     portalColor:0x40ffa0, xpReward:60 },
-  { name:'The Jungle of Shadows',  chapter:'IV',  bg:'jungle',   platCol:0x1a3a10, platTop:0x80ff20,
+  { name:'The Jungle of Shadows',  chapter:'4',  bg:'jungle',   platCol:0x1a3a10, platTop:0x80ff20,
     enemies:[{type:'soldier',count:5},{type:'demon',count:3},{type:'siren',count:2}],
     boss:{type:'jungleSpider',name:'The Jungle Queen',hp:160},
     portalColor:0x80ff40, xpReward:70 },
-  { name:'The Deep Jungle',        chapter:'V',   bg:'jungle2',  platCol:0x0a2808, platTop:0x40c020,
+  { name:'The Deep Jungle',        chapter:'5',   bg:'jungle2',  platCol:0x0a2808, platTop:0x40c020,
     enemies:[{type:'demon',count:5},{type:'ogre',count:3},{type:'shadow',count:2}],
     boss:{type:'jungleDragon',name:'Venom Drake',hp:190},
     portalColor:0xc0ff40, xpReward:85 },
-  { name:'The Peaks of Iska',      chapter:'VI',  bg:'mountain', platCol:0x283048, platTop:0xa0c0e0,
+  { name:'The Peaks of Iska',      chapter:'6',  bg:'mountain', platCol:0x283048, platTop:0xa0c0e0,
     enemies:[{type:'wraith',count:7},{type:'giant',count:2}],
     boss:{type:'frostGiant',name:'Blizzard Giant',hp:210},
     portalColor:0x80c0ff, xpReward:95 },
-  { name:'The Volcano of Malkor',  chapter:'VII', bg:'volcano',  platCol:0x3a1008, platTop:0xff4400,
+  { name:'The Volcano of Malkor',  chapter:'7', bg:'volcano',  platCol:0x3a1008, platTop:0xff4400,
     enemies:[{type:'demon',count:6},{type:'shadow',count:3},{type:'giant',count:2}],
     boss:{type:'lavaBeast',name:'The Lava Beast',hp:260},
     portalColor:0xff6600, xpReward:110 },
-  { name:'The Dark Peak',          chapter:'VIII',bg:'peak',     platCol:0x2a1040, platTop:0xaa40ff,
+  { name:'The Dark Peak',          chapter:'8',bg:'peak',     platCol:0x2a1040, platTop:0xaa40ff,
     enemies:[{type:'shadow',count:8},{type:'demon',count:3}],
     boss:{type:'stefano',name:'Stefano',hp:280},
     portalColor:0xff40ff, xpReward:130 }
@@ -434,7 +525,7 @@ class IntroScene extends Phaser.Scene {
     bg.lineStyle(1,0xc9a84c,0.3);bg.strokeRect(30,30,W-60,H-60);
     bg.lineStyle(1,0xc9a84c,0.15);bg.strokeRect(36,36,W-72,H-72);
 
-    this.add.text(W/2,42,'✦  The Legend of Sarnaria  ✦',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'13px',color:'#c9a84c'}).setOrigin(0.5);
+    this.add.text(W/2,42,'✦  The Legend of Sonaria  ✦',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'13px',color:'#c9a84c'}).setOrigin(0.5);
     this.storyTxt=this.add.text(W/2,H/2,'',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'15px',color:'#e8dcc8',wordWrap:{width:W-140},align:'center',lineSpacing:8}).setOrigin(0.5);
     this.pageTxt=this.add.text(W/2,H-50,'',{fontFamily:'monospace',fontSize:'10px',color:'#5a4a3a'}).setOrigin(0.5);
     const hint=this.add.text(W/2,H-38,'tap or press any key to continue',{fontFamily:'monospace',fontSize:'10px',color:'#4a3a2a'}).setOrigin(0.5);
@@ -522,7 +613,188 @@ class IntroScene extends Phaser.Scene {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// DIFFICULTY SELECT
+// ONLINE LOBBY SCENE
+// ═══════════════════════════════════════════════════════════════════════════════
+class OnlineLobbyScene extends Phaser.Scene {
+  constructor(){ super('OnlineLobby'); }
+
+  create(){
+    this._inputEl = null;
+    this.status = '';
+    this.isConnecting = false;
+
+    const g = this.add.graphics();
+    g.fillStyle(0x06020f,1); g.fillRect(0,0,W,H);
+    g.fillStyle(0x1a0a30,0.6); g.fillRoundedRect(60,20,W-120,H-40,12);
+    g.lineStyle(1,0xc9a84c,0.4); g.strokeRoundedRect(60,20,W-120,H-40,12);
+
+    this.add.text(W/2,46,'Online Multiplayer',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'20px',color:'#c9a84c'}).setOrigin(0.5);
+    this.add.text(W/2,72,'Play with Liam or Levi on a different device',{fontFamily:'monospace',fontSize:'10px',color:'#5a4a6a'}).setOrigin(0.5);
+
+    // ── HOST section ────────────────────────────────────────────────────────
+    const code = ONLINE.genCode();
+    g.fillStyle(0x0a1a30,0.8); g.fillRoundedRect(80,96,W/2-100,140,8);
+    g.lineStyle(1,0x40c0ff,0.4); g.strokeRoundedRect(80,96,W/2-100,140,8);
+    this.add.text(160,110,'HOST A GAME',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'13px',color:'#40c0ff'}).setOrigin(0.5);
+    this.add.text(160,130,'Share this code:',{fontFamily:'monospace',fontSize:'10px',color:'#6a8a9a'}).setOrigin(0.5);
+    // Big room code display
+    this.codeTxt = this.add.text(160,158,code,{fontFamily:"'Cinzel Decorative',cursive",fontSize:'32px',color:'#ffffff',stroke:'#40c0ff',strokeThickness:1}).setOrigin(0.5);
+    this.tweens.add({targets:this.codeTxt,alpha:{from:0.6,to:1},duration:800,yoyo:true,repeat:-1});
+    this.add.text(160,188,'Send this to the other player',{fontFamily:'monospace',fontSize:'9px',color:'#4a6a7a'}).setOrigin(0.5);
+
+    const hBtn = this.add.text(160,216,'HOST WITH THIS CODE',{fontFamily:'monospace',fontSize:'10px',color:'#000000',backgroundColor:'#40c0ff',padding:{x:14,y:8}}).setOrigin(0.5).setInteractive({cursor:'pointer'});
+    hBtn.on('pointerdown',()=> this.hostGame(code));
+    hBtn.on('pointerover',()=> hBtn.setStyle({color:'#002040',backgroundColor:'#80e0ff'}));
+    hBtn.on('pointerout', ()=> hBtn.setStyle({color:'#000000',backgroundColor:'#40c0ff'}));
+
+    // ── JOIN section ────────────────────────────────────────────────────────
+    g.fillStyle(0x1a0a20,0.8); g.fillRoundedRect(W/2+20,96,W/2-100,140,8);
+    g.lineStyle(1,0xc9a84c,0.4); g.strokeRoundedRect(W/2+20,96,W/2-100,140,8);
+    this.add.text(W/2+120,110,'JOIN A GAME',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'13px',color:'#c9a84c'}).setOrigin(0.5);
+    this.add.text(W/2+120,130,'Enter room code:',{fontFamily:'monospace',fontSize:'10px',color:'#8a7a5a'}).setOrigin(0.5);
+
+    // Code input field (HTML)
+    this._buildCodeInput(W/2+20+14, 144);
+
+    const jBtn = this.add.text(W/2+120,216,'JOIN GAME',{fontFamily:'monospace',fontSize:'10px',color:'#000000',backgroundColor:'#c9a84c',padding:{x:14,y:8}}).setOrigin(0.5).setInteractive({cursor:'pointer'});
+    jBtn.on('pointerdown',()=> this.joinGame());
+    jBtn.on('pointerover',()=> jBtn.setStyle({color:'#1a0800',backgroundColor:'#ffd080'}));
+    jBtn.on('pointerout', ()=> jBtn.setStyle({color:'#000000',backgroundColor:'#c9a84c'}));
+
+    // ── Status / waiting area ────────────────────────────────────────────────
+    this.statusTxt = this.add.text(W/2,256,'',{fontFamily:'monospace',fontSize:'11px',color:'#40ff80',align:'center'}).setOrigin(0.5);
+    this.waitDots = 0;
+    this.waitTimer = 0;
+
+    // Player slots
+    g.fillStyle(0x100820,0.7); g.fillRoundedRect(80,272,W-160,80,8);
+    this.p1Slot = this.add.text(160,300,'P1: Waiting...',{fontFamily:'monospace',fontSize:'11px',color:'#40c0ff'}).setOrigin(0.5);
+    this.p2Slot = this.add.text(W-160,300,'P2: Waiting...',{fontFamily:'monospace',fontSize:'11px',color:'#c9a84c'}).setOrigin(0.5);
+    this.add.text(W/2,340,'Once both players are connected, the host starts the game.',{fontFamily:'monospace',fontSize:'9px',color:'#4a3a5a'}).setOrigin(0.5);
+
+    // Start (host only, enabled once P2 joins)
+    this.startBtn = this.add.text(W/2,378,'START GAME  →',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'14px',color:'#3a3a4a',backgroundColor:'#1a1a2a',padding:{x:20,y:10}}).setOrigin(0.5);
+
+    // Back
+    const bk = this.add.text(W/2,430,'← Back',{fontFamily:'monospace',fontSize:'11px',color:'#5a4a6a'}).setOrigin(0.5).setInteractive({cursor:'pointer'});
+    bk.on('pointerdown',()=>{ this._cleanup(); ONLINE.leave(); this.scene.start('ModeSelect'); });
+
+    // Init Supabase
+    if(!ONLINE.init()){
+      this.statusTxt.setText('⚠ Multiplayer unavailable.\nConfigure Supabase keys in the code.').setColor('#ff8040');
+    }
+  }
+
+  _buildCodeInput(x, y){
+    const canvas = this.sys.canvas;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = rect.width/W, scaleY = rect.height/H;
+    const inp = document.createElement('input');
+    inp.maxLength = 4;
+    inp.placeholder = '0000';
+    inp.id = 'room-code-input';
+    Object.assign(inp.style,{
+      position:'absolute',
+      left:`${rect.left + x*scaleX}px`,
+      top:`${rect.top + y*scaleY}px`,
+      width:`${148*scaleX}px`,
+      height:`${36*scaleY}px`,
+      background:'rgba(10,6,24,0.95)',
+      border:'2px solid #c9a84c',
+      color:'#ffffff',
+      fontFamily:"'Cinzel Decorative',cursive",
+      fontSize:`${22*scaleY}px`,
+      textAlign:'center',
+      letterSpacing:'8px',
+      outline:'none',
+      borderRadius:'6px',
+      zIndex:'999',
+    });
+    inp.oninput = ()=>{ inp.value = inp.value.replace(/[^0-9]/g,'').slice(0,4); };
+    document.body.appendChild(inp);
+    this._inputEl = inp;
+    this.events.once('shutdown', ()=> this._cleanup());
+  }
+
+  _cleanup(){
+    if(this._inputEl){ this._inputEl.remove(); this._inputEl = null; }
+  }
+
+  async hostGame(code){
+    if(this.isConnecting) return;
+    if(!ONLINE.client){ this.statusTxt.setText('⚠ Supabase not configured.').setColor('#ff4040'); return; }
+    this.isConnecting = true;
+    this.statusTxt.setText('Creating room...').setColor('#40c0ff');
+    ONLINE.active = true;
+    MP.active = true;
+    MP.p1name = MP.p1name || 'Host';
+
+    await ONLINE.host(code,
+      // P2 joined
+      ()=>{
+        MP.p2name = 'Player 2';
+        this.p2Slot.setText(`P2: ${MP.p2name} ✓`).setColor('#40ff80');
+        this.statusTxt.setText('Player 2 connected! Start when ready.').setColor('#40ff80');
+        // Enable start button
+        this.startBtn.setStyle({color:'#000000',backgroundColor:'#40c060'})
+          .setInteractive({cursor:'pointer'})
+          .on('pointerdown',()=> this._startOnlineGame(code));
+      },
+      // Received P2 state
+      (payload)=>{ ONLINE.remotePlayer = payload; },
+      // P2 disconnected
+      ()=>{ this.p2Slot.setText('P2: Disconnected').setColor('#ff4040'); this.statusTxt.setText('Player 2 left.').setColor('#ff4040'); }
+    );
+    this.p1Slot.setText(`P1: ${MP.p1name} (you) ✓`).setColor('#40c0ff');
+    this.statusTxt.setText(`Room ${code} created. Waiting for Player 2...`).setColor('#c9a84c');
+  }
+
+  async joinGame(){
+    const inp = this._inputEl;
+    const code = inp ? inp.value.trim() : '';
+    if(code.length !== 4){ this.statusTxt.setText('Enter the 4-digit code first.').setColor('#ff4040'); return; }
+    if(this.isConnecting) return;
+    if(!ONLINE.client){ this.statusTxt.setText('⚠ Supabase not configured.').setColor('#ff4040'); return; }
+    this.isConnecting = true;
+    this.statusTxt.setText(`Joining room ${code}...`).setColor('#c9a84c');
+    ONLINE.active = true;
+    ONLINE.isHost = false;
+    MP.active = true;
+    MP.p2name = MP.p2name || 'Guest';
+
+    await ONLINE.join(code,
+      (payload)=>{ ONLINE.remotePlayer = payload; },
+      ()=>{ this.statusTxt.setText('Host disconnected.').setColor('#ff4040'); }
+    );
+    // Listen for host's start signal
+    ONLINE.channel.on('broadcast',{event:'start'},()=>{
+      this._cleanup();
+      this.scene.start('SkinSelect');
+    });
+    this.p2Slot.setText(`P2: ${MP.p2name} (you) ✓`).setColor('#40ff80');
+    this.statusTxt.setText(`Joined room ${code}. Waiting for host to start...`).setColor('#40ff80');
+  }
+
+  _startOnlineGame(code){
+    this._cleanup();
+    // Tell P2 to start
+    ONLINE.channel.send({ type:'broadcast', event:'start', payload:{ level:0 } });
+    this.scene.start('SkinSelect');
+  }
+
+  update(time, delta){
+    // Animate waiting dots
+    this.waitTimer += delta;
+    if(this.waitTimer > 500){
+      this.waitTimer = 0;
+      this.waitDots = (this.waitDots+1)%4;
+    }
+    // Listen for start signal if we're P2
+    if(ONLINE.active && !ONLINE.isHost && ONLINE.channel){
+      // Handled via subscription in join()
+    }
+  }
+}
 // ═══════════════════════════════════════════════════════════════════════════════
 class DifficultyScene extends Phaser.Scene {
   constructor(){super('Difficulty');}
@@ -539,7 +811,7 @@ class DifficultyScene extends Phaser.Scene {
       {key:'peaceful',label:'🌿 Peaceful', col:'#40c060', desc:'Enemies deal half damage. Perfect for first playthrough.'},
       {key:'normal',  label:'⚔ Normal',   col:'#c9a84c', desc:'Balanced challenge. The intended experience.'},
       {key:'hard',    label:'🔥 Hard',     col:'#e06020', desc:'Enemies are stronger and bosses more aggressive.'},
-      {key:'sarnaria',label:'💀 Sarnaria', col:'#c020c0', desc:'Enemies enrage at low HP. Bosses have a third phase. No mercy.'},
+      {key:'sarnaria',label:'💀 Sonaria', col:'#c020c0', desc:'Enemies enrage at low HP. Bosses have a third phase. No mercy.'},
     ];
 
     diffs.forEach((d,i)=>{
@@ -597,14 +869,24 @@ class ModeScene extends Phaser.Scene {
     // 2P button
     const m2x=W/2+20,m2y=80,m2w=W/2-110,m2h=80;
     const b2=this.add.graphics();
-    const s2=MP.active;
+    const s2=MP.active&&!ONLINE.active;
     b2.fillStyle(s2?0x102040:0x100818,0.95);b2.fillRoundedRect(m2x,m2y,m2w,m2h,8);
     b2.lineStyle(2,s2?0x40c0ff:0x3a2a5a,1);b2.strokeRoundedRect(m2x,m2y,m2w,m2h,8);
-    this.add.text(m2x+m2w/2,m2y+18,'⚔⚔  Co-op',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'16px',color:s2?'#40c0ff':'#6a5a7a'}).setOrigin(0.5);
+    this.add.text(m2x+m2w/2,m2y+18,'⚔⚔  Local Co-op',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'14px',color:s2?'#40c0ff':'#6a5a7a'}).setOrigin(0.5);
     this.add.text(m2x+m2w/2,m2y+44,'Two players\nSame device',{fontFamily:'monospace',fontSize:'10px',color:s2?'#c8e8ff':'#4a3a5a',align:'center'}).setOrigin(0.5);
-    this.add.text(m2x+m2w/2,m2y+62,'Bosses are harder in co-op!',{fontFamily:'monospace',fontSize:'9px',color:s2?'#ff8040':'#3a2a4a'}).setOrigin(0.5);
     const z2=this.add.zone(m2x,m2y,m2w,m2h).setOrigin(0).setInteractive();
-    z2.on('pointerdown',()=>{MP.active=true;this.scene.restart();});
+    z2.on('pointerdown',()=>{MP.active=true;ONLINE.active=false;this.scene.restart();});
+
+    // Online button
+    const m3x=80,m3y=175,m3w=W-160,m3h=60;
+    const b3=this.add.graphics();
+    const s3=ONLINE.active;
+    b3.fillStyle(s3?0x102010:0x100818,0.95);b3.fillRoundedRect(m3x,m3y,m3w,m3h,8);
+    b3.lineStyle(2,s3?0x40ff80:0x3a2a5a,1);b3.strokeRoundedRect(m3x,m3y,m3w,m3h,8);
+    this.add.text(m3x+m3w/2,m3y+18,'🌐  Online Multiplayer — Play with Liam or Levi on a different device',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'12px',color:s3?'#40ff80':'#5a7a5a'}).setOrigin(0.5);
+    this.add.text(m3x+m3w/2,m3y+40,'Each player uses their own device. Share a 4-digit room code.',{fontFamily:'monospace',fontSize:'9px',color:s3?'#80c080':'#3a4a3a'}).setOrigin(0.5);
+    const z3=this.add.zone(m3x,m3y,m3w,m3h).setOrigin(0).setInteractive();
+    z3.on('pointerdown',()=>{ document.querySelectorAll('.sarnaria-input').forEach(e=>e.remove()); this.scene.start('OnlineLobby'); });
 
     // Controls info
     const cy=180;
@@ -853,9 +1135,15 @@ class TitleScene extends Phaser.Scene {
       webkitTapHighlightColor:'rgba(201,168,76,0.3)',
     });
     startBtn.addEventListener('click',()=>{
-      initAudio(); // must be directly in click handler for Chrome
-      startBtn.remove();
-      this.scene.start('Intro');
+      initAudio();
+      startBtn.textContent='🔊 Sound enabled — loading...';
+      startBtn.style.borderColor='#40c060';
+      startBtn.style.color='#40c060';
+      // Small delay so the tone plays before scene change
+      setTimeout(()=>{
+        startBtn.remove();
+        this.scene.start('Intro');
+      }, 200);
     });
     // Also allow keyboard
     this.input.keyboard.once('keydown',()=>{
@@ -1749,9 +2037,62 @@ class GameScene extends Phaser.Scene {
     this.updateMinimap();
     this.updateVignette();
     this.updateParticles();
+    this.syncOnline(dt);
 
     if(this.comboCount>0){ this.comboTimer-=dt; if(this.comboTimer<=0){this.comboCount=0;} }
     if(this.teamworkTimer>0) this.teamworkTimer-=dt;
+  }
+
+  syncOnline(dt){
+    if(!ONLINE.active) return;
+    const p=this.player,ps=p.spr;
+
+    // Send our state
+    ONLINE.send({
+      x: Math.round(ps.x), y: Math.round(ps.y),
+      dir: p.dir, hp: p.hp, maxHp: p.maxHp,
+      atk: p.atk, skin: SAVE.skin,
+      weapon: SAVE.weapon, vx: Math.round(ps.body.velocity.x),
+    });
+
+    // Draw remote player if we have their state
+    if(ONLINE.remotePlayer){
+      this.drawRemotePlayer(this.charGfx, ONLINE.remotePlayer);
+    }
+  }
+
+  drawRemotePlayer(g, state){
+    const {x,y,dir,hp,maxHp,skin,atk} = state;
+    if(!x||!y) return;
+    const sk = SKINS[skin] || SKINS.alvano;
+    const f = dir||1;
+
+    // Ghost tint to distinguish from local player
+    // Draw simple but recognisable remote player
+    if(atk){
+      g.fillStyle(sk.accentCol,0.6);
+      g.fillRect(x+f*8,y-26,f*3,20);
+    }
+    // Body
+    g.fillStyle(sk.cloakCol,0.8);
+    g.fillTriangle(x,y-16,x-f*14,y+8,x+f*6,y+8);
+    g.fillStyle(sk.bodyCol,0.8);g.fillRect(x-7,y-16,14,20);
+    g.fillStyle(sk.headCol,0.9);g.fillCircle(x,y-24,9);
+    g.fillStyle(sk.hoodCol,0.7);g.fillCircle(x,y-26,7);
+    g.fillStyle(sk.eyeCol,0.9);g.fillCircle(x+f*3,y-25,2.5);
+
+    // Name tag
+    if(!this._remoteTxt){
+      this._remoteTxt=this.add.text(0,0,ONLINE.isHost?MP.p2name:'Host',{
+        fontFamily:'monospace',fontSize:'9px',color:'#40ff80',
+        stroke:'#000000',strokeThickness:2
+      }).setDepth(13);
+    }
+    this._remoteTxt.setPosition(x-20,y-46);
+
+    // HP bar above
+    g.fillStyle(0x002000,0.7);g.fillRect(x-18,y-42,36,4);
+    g.fillStyle(0x40ff40,1);g.fillRect(x-18,y-42,36*(hp/maxHp),4);
   }
 
   // ── PLAYER UPDATE ──────────────────────────────────────────────────────────
@@ -4826,7 +5167,7 @@ class WinScene extends Phaser.Scene {
     this.t=0;this.bg=this.add.graphics();
     this.add.text(W/2,H*0.14,'✦ HARMONY RESTORED ✦',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'26px',color:'#c9a84c',stroke:'#4a2000',strokeThickness:2}).setOrigin(0.5);
     this.add.text(W/2,H*0.3,'Alvano retrieved the Heart of the Forest.',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'14px',color:'#e8dcc8'}).setOrigin(0.5);
-    this.add.text(W/2,H*0.4,'Sarnaria is free. Your mother will live.',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'14px',color:'#e8dcc8'}).setOrigin(0.5);
+    this.add.text(W/2,H*0.4,'Sonaria is free. Your mother will live.',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'14px',color:'#e8dcc8'}).setOrigin(0.5);
     this.add.text(W/2,H*0.5,'Stefano was never heard from again.',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'13px',color:'#8a6a9a'}).setOrigin(0.5);
     this.add.text(W/2,H*0.62,`Final Score: ${this.score}   Total XP: ${this.xp}`,{fontFamily:'monospace',fontSize:'18px',color:'#c9a84c'}).setOrigin(0.5);
     const r=this.add.text(W/2,H*0.8,'— Play Again —',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'16px',color:'#c9a84c'}).setOrigin(0.5);
@@ -4851,7 +5192,7 @@ new Phaser.Game({
   backgroundColor:'#000000',
   parent:'game-container',
   physics:{default:'arcade',arcade:{gravity:{y:0},debug:false}},
-  scene:[BootScene,TitleScene,IntroScene,DifficultyScene,ModeScene,SkinScene,ShopScene,GameScene,DeathScene,WinScene]
+  scene:[BootScene,TitleScene,IntroScene,DifficultyScene,ModeScene,OnlineLobbyScene,SkinScene,ShopScene,GameScene,DeathScene,WinScene]
 });
 </script>
 </body>

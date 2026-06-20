@@ -28,10 +28,8 @@ canvas { display:block; touch-action:none; }
   <button id="mute-btn" onclick="toggleMute()" title="Toggle Sound">🔊</button></div>
 <script>
 // ── ONLINE MULTIPLAYER ────────────────────────────────────────────────────────
-// Uses Supabase Realtime (free tier, no server needed)
-// Players share a 4-digit room code. Host is P1, joiner is P2.
-const SUPABASE_URL = 'https://utcmdkdlkixubqgxkceg.supabase.co/';  // REPLACE with your Supabase URL
-const SUPABASE_KEY = 'sb_publishable_nl7Ojm1L_LQAieLRf5FfIQ_ac_Uhga4';                      // REPLACE with your anon key
+const SUPABASE_URL = 'https://your-project.supabase.co';
+const SUPABASE_KEY = 'your-anon-key';
 
 const ONLINE = {
   active: false,
@@ -39,8 +37,13 @@ const ONLINE = {
   roomCode: null,
   channel: null,
   client: null,
-  remotePlayer: null,  // Remote player state received from network
+  // Remote player — interpolated position
+  remotePlayer: null,
+  remoteRender: null, // smooth interpolated state
   lastSent: 0,
+  // Callbacks
+  _onEnemySync: null,
+  _onBossSync: null,
 
   init(){
     if(typeof window.supabase === 'undefined') return false;
@@ -54,53 +57,90 @@ const ONLINE = {
 
   async host(code, onJoin, onState, onDisconnect){
     if(!this.client) return false;
-    this.roomCode = code;
-    this.isHost = true;
-    this.channel = this.client.channel(`sonaria-${code}`, {
-      config: { broadcast: { self: false } }
-    });
+    this.roomCode = code; this.isHost = true;
+    this.channel = this.client.channel(`sonaria-${code}`,{config:{broadcast:{self:false}}});
     this.channel
-      .on('broadcast', { event: 'join' }, ()=> onJoin && onJoin())
-      .on('broadcast', { event: 'state' }, ({ payload }) => onState && onState(payload))
-      .on('broadcast', { event: 'leave' }, ()=> onDisconnect && onDisconnect())
+      .on('broadcast',{event:'join'},()=> onJoin&&onJoin())
+      .on('broadcast',{event:'pstate'},(d)=> onState&&onState(d.payload))
+      .on('broadcast',{event:'attack'},(d)=> this._handleRemoteAttack&&this._handleRemoteAttack(d.payload))
+      .on('broadcast',{event:'leave'},()=> onDisconnect&&onDisconnect())
       .subscribe();
     return true;
   },
 
-  async join(code, onState, onDisconnect){
+  async join(code, onHostState, onEnemySync, onBossSync, onDisconnect){
     if(!this.client) return false;
-    this.roomCode = code;
-    this.isHost = false;
-    this.channel = this.client.channel(`sonaria-${code}`, {
-      config: { broadcast: { self: false } }
-    });
+    this.roomCode = code; this.isHost = false;
+    this._onEnemySync = onEnemySync;
+    this._onBossSync = onBossSync;
+    this.channel = this.client.channel(`sonaria-${code}`,{config:{broadcast:{self:false}}});
     this.channel
-      .on('broadcast', { event: 'state' }, ({ payload }) => onState && onState(payload))
-      .on('broadcast', { event: 'leave' }, ()=> onDisconnect && onDisconnect())
-      .subscribe(async (status) => {
-        if(status === 'SUBSCRIBED'){
-          await this.channel.send({ type:'broadcast', event:'join', payload:{} });
+      .on('broadcast',{event:'pstate'},(d)=> onHostState&&onHostState(d.payload))
+      .on('broadcast',{event:'enemies'},(d)=> onEnemySync&&onEnemySync(d.payload))
+      .on('broadcast',{event:'boss'},(d)=> onBossSync&&onBossSync(d.payload))
+      .on('broadcast',{event:'start'},(d)=>{ this._onStart&&this._onStart(d.payload); })
+      .on('broadcast',{event:'leave'},()=> onDisconnect&&onDisconnect())
+      .subscribe(async(status)=>{
+        if(status==='SUBSCRIBED'){
+          await this.channel.send({type:'broadcast',event:'join',payload:{}});
         }
       });
     return true;
   },
 
-  send(data){
-    if(!this.channel || !this.active) return;
-    const now = Date.now();
-    if(now - this.lastSent < 50) return; // max 20 sends/sec
-    this.lastSent = now;
-    this.channel.send({ type:'broadcast', event:'state', payload: data });
+  sendPlayerState(data){
+    if(!this.channel||!this.active) return;
+    const now=Date.now();
+    if(now-this.lastSent<33) return; // ~30fps
+    this.lastSent=now;
+    this.channel.send({type:'broadcast',event:'pstate',payload:data});
+  },
+
+  sendEnemyState(enemies, boss){
+    if(!this.channel||!this.active||!this.isHost) return;
+    // Send compact enemy state
+    const eState=enemies.filter(e=>!e.dead).map(e=>({
+      id:e._id, hp:e.hp, x:Math.round(e.spr.x), dead:e.dead
+    }));
+    this.channel.send({type:'broadcast',event:'enemies',payload:{enemies:eState}});
+    if(boss){
+      this.channel.send({type:'broadcast',event:'boss',payload:{hp:boss.hp,dead:boss.dead,phase:boss.phase}});
+    }
+  },
+
+  sendAttack(enemyId, damage){
+    // Guest sends attack to host for processing
+    if(!this.channel||!this.active||this.isHost) return;
+    this.channel.send({type:'broadcast',event:'attack',payload:{id:enemyId,dmg:damage}});
+  },
+
+  interpolate(dt){
+    // Smooth remote player position
+    if(!this.remotePlayer) return;
+    if(!this.remoteRender){
+      this.remoteRender={...this.remotePlayer};
+    } else {
+      const lerp=(a,b,t)=>a+(b-a)*t;
+      const speed=Math.min(1, dt*12); // interpolation speed
+      this.remoteRender.x=lerp(this.remoteRender.x||this.remotePlayer.x, this.remotePlayer.x, speed);
+      this.remoteRender.y=lerp(this.remoteRender.y||this.remotePlayer.y, this.remotePlayer.y, speed);
+      this.remoteRender.hp=this.remotePlayer.hp;
+      this.remoteRender.maxHp=this.remotePlayer.maxHp;
+      this.remoteRender.dir=this.remotePlayer.dir;
+      this.remoteRender.atk=this.remotePlayer.atk;
+      this.remoteRender.skin=this.remotePlayer.skin;
+      this.remoteRender.weapon=this.remotePlayer.weapon;
+      this.remoteRender.wk=this.remotePlayer.wk;
+    }
   },
 
   async leave(){
     if(this.channel){
-      await this.channel.send({ type:'broadcast', event:'leave', payload:{} });
+      await this.channel.send({type:'broadcast',event:'leave',payload:{}});
       this.client.removeChannel(this.channel);
     }
-    this.active = false;
-    this.channel = null;
-    this.remotePlayer = null;
+    this.active=false; this.channel=null;
+    this.remotePlayer=null; this.remoteRender=null;
   }
 };
 
@@ -116,10 +156,12 @@ const DIFFICULTY = {
 
 // ── SPECIAL MOVES ─────────────────────────────────────────────────────────────
 const SPECIALS = {
-  alvano: { name:'Shadow Dash',     key:'Q', cooldown:8,  charges:1,  desc:'Blink forward — invincible during dash' },
-  liam:   { name:'Arcane Teleport', key:'Q', cooldown:12, charges:3,  desc:'Teleport — 3 charges before recharge' },
-  levi:   { name:'Vine Snare',      key:'Q', cooldown:10, charges:1,  desc:'Root all nearby enemies in vines' },
-  roar:   { name:'Sonic Roar',      key:'Q', cooldown:15, charges:1,  desc:'Blast wave — pushes all enemies back' },
+  alvano:    { name:'Shadow Dash',     key:'Q', cooldown:8,  charges:1,  desc:'Blink forward — invincible during dash' },
+  liam:      { name:'Arcane Teleport', key:'Q', cooldown:12, charges:3,  desc:'Teleport — 3 charges before recharge' },
+  levi:      { name:'Vine Snare',      key:'Q', cooldown:10, charges:1,  desc:'Root all nearby enemies in vines' },
+  roar:      { name:'Sonic Roar',      key:'Q', cooldown:15, charges:1,  desc:'Blast wave — pushes all enemies back' },
+  vampirina: { name:'Bat Storm',       key:'Q', cooldown:14, charges:1,  desc:'Orbiting bats attack nearby enemies' },
+  marcel:    { name:'Thunder Dash',    key:'Q', cooldown:8,  charges:1,  desc:'Electric dash — stuns all enemies passed through' },
 };
 
 // ── STORY BEATS ───────────────────────────────────────────────────────────────
@@ -405,6 +447,7 @@ const SUPERPOWERS = {
   levi:      { name:'Natures Fury',   cooldown:22, desc:'Calls 3 falling tree trunks on enemies' },
   roar:      { name:'Apex Predator',  cooldown:25, desc:'Invincible + 3x damage for 4 seconds' },
   vampirina: { name:'Drain Life',     cooldown:16, desc:'Steals HP from all enemies in range' },
+  marcel:    { name:'Thunderstorm',   cooldown:20, desc:'5 lightning bolts strike random enemies from the sky' },
 };
 
 // ── SKIN DEFS ─────────────────────────────────────────────────────────────────
@@ -443,6 +486,13 @@ const SKINS = {
     hoodCol:0x600840,    eyeCol:0xff2040,    bootCol:0x0a0210,
     accentCol:0xff4060,  hairCol:0x0a0210,
     floatHeight:16, moveStyle:'vampire',
+  },
+  marcel: {
+    name:'Marcel',       desc:'Half human, half Raichu — electric powers',
+    bodyCol:0xc87010,    cloakCol:0x8a4a08,  headCol:0xe8a020,
+    hoodCol:0x6a3206,    eyeCol:0xffcc00,    bootCol:0x3a1a04,
+    accentCol:0xffee00,  hairCol:0x3a1a04,
+    floatHeight:0, moveStyle:'electric',
   },
 };
 
@@ -757,22 +807,28 @@ class OnlineLobbyScene extends Phaser.Scene {
     if(!ONLINE.client){ this.statusTxt.setText('⚠ Supabase not configured.').setColor('#ff4040'); return; }
     this.isConnecting = true;
     this.statusTxt.setText(`Joining room ${code}...`).setColor('#c9a84c');
-    ONLINE.active = true;
-    ONLINE.isHost = false;
-    MP.active = true;
-    MP.p2name = MP.p2name || 'Guest';
+    ONLINE.active = true; ONLINE.isHost = false;
+    MP.active = true; MP.p2name = MP.p2name || 'Guest';
 
     await ONLINE.join(code,
+      // Host player state
       (payload)=>{ ONLINE.remotePlayer = payload; },
+      // Enemy sync from host
+      (payload)=>{ ONLINE._pendingEnemySync = payload; },
+      // Boss sync from host
+      (payload)=>{ ONLINE._pendingBossSync = payload; },
+      // Disconnect
       ()=>{ this.statusTxt.setText('Host disconnected.').setColor('#ff4040'); }
     );
-    // Listen for host's start signal
-    ONLINE.channel.on('broadcast',{event:'start'},()=>{
+
+    // Listen for start signal
+    ONLINE._onStart = ()=>{
       this._cleanup();
       this.scene.start('SkinSelect');
-    });
+    };
+
     this.p2Slot.setText(`P2: ${MP.p2name} (you) ✓`).setColor('#40ff80');
-    this.statusTxt.setText(`Joined room ${code}. Waiting for host to start...`).setColor('#40ff80');
+    this.statusTxt.setText(`Joined room ${code}. Waiting for host...`).setColor('#40ff80');
   }
 
   _startOnlineGame(code){
@@ -990,8 +1046,8 @@ class SkinScene extends Phaser.Scene {
     this.add.text(W/2,36,'CHOOSE YOUR HERO',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'18px',color:'#c9a84c'}).setOrigin(0.5);
     this.add.text(W/2,58,'You can change skin any time from the shop',{fontFamily:'monospace',fontSize:'10px',color:'#4a3a5a'}).setOrigin(0.5);
 
-    // 5 skin cards (Vampirina added)
-    const cardW=134,cardH=210,startX=50,cardY=82;
+    // 6 skin cards
+    const cardW=116,cardH=200,startX=40,cardY=82;
     this.skinKeys.forEach((key,i)=>{
       const sk=SKINS[key];
       const cx=startX+i*(cardW+8)+cardW/2;
@@ -1087,6 +1143,30 @@ class SkinScene extends Phaser.Scene {
       g.fillTriangle(x-6,y-12,x-26,y-30,x,y-4);g.fillTriangle(x+6,y-12,x+26,y-28,x,y-4);
       g.fillStyle(0xff0030,0.9);g.fillCircle(x-4,y-22,2.5);g.fillCircle(x+4,y-22,2.5);
       g.fillStyle(0xffffff,0.9);g.fillTriangle(x-2,y-18,x-1,y-18,x-1.5,y-14);g.fillTriangle(x+2,y-18,x+1,y-18,x+1.5,y-14);
+    }
+    // Marcel — Raichu ears, cheeks, tail, lightning bolt
+    if(sk.name==='Marcel'){
+      // Raichu ears
+      g.fillStyle(sk.hairCol,1);
+      g.fillTriangle(x-5,y-22,x-9,y-38,x-1,y-24);
+      g.fillTriangle(x+5,y-22,x+9,y-38,x+1,y-24);
+      g.fillStyle(0x1a0a04,0.7);
+      g.fillTriangle(x-5,y-22,x-8,y-36,x-2,y-24);
+      g.fillTriangle(x+5,y-22,x+8,y-36,x+2,y-24);
+      g.fillStyle(sk.accentCol,0.9);g.fillCircle(x-8,y-37,2);g.fillCircle(x+8,y-37,2);
+      // Cheek patches — glowing
+      g.fillStyle(0xff2020,0.85);g.fillCircle(x-5,y-16,4);g.fillCircle(x+5,y-16,4);
+      g.fillStyle(0xff6060,0.4);g.fillCircle(x-5,y-16,6);g.fillCircle(x+5,y-16,6);
+      // Lightning bolt emblem on chest
+      g.fillStyle(sk.accentCol,0.9);
+      g.fillTriangle(x-1,y-6,x+3,y-6,x+1,y-2);
+      g.fillTriangle(x-2,y-2,x+2,y-2,x,y+2);
+      // Zigzag tail
+      g.lineStyle(3,sk.bodyCol,0.9);
+      g.lineBetween(x-5,y+8,x-9,y+3);
+      g.lineBetween(x-9,y+3,x-5,y-1);
+      g.lineBetween(x-5,y-1,x-11,y-5);
+      g.fillStyle(sk.hairCol,1);g.fillCircle(x-11,y-5,3);
     }
   }
 }
@@ -1517,6 +1597,7 @@ class GameScene extends Phaser.Scene {
       atkRange:['siren','wraith','shadow'].includes(type)?200:48,
       projT:0,frozen:0,knockback:0,
       enraged:false,
+      _id:`${type}_${ex}_${Math.floor(Math.random()*9999)}`, // unique network ID
     };
     e.spr.setVisible(false);e.spr.setGravityY(520);e.spr.setCollideWorldBounds(true);
     e.spr.body.setSize(20,36);
@@ -2045,54 +2126,157 @@ class GameScene extends Phaser.Scene {
 
   syncOnline(dt){
     if(!ONLINE.active) return;
-    const p=this.player,ps=p.spr;
+    const p=this.player, ps=p.spr;
 
-    // Send our state
-    ONLINE.send({
-      x: Math.round(ps.x), y: Math.round(ps.y),
-      dir: p.dir, hp: p.hp, maxHp: p.maxHp,
-      atk: p.atk, skin: SAVE.skin,
-      weapon: SAVE.weapon, vx: Math.round(ps.body.velocity.x),
+    // Interpolate remote player position (smooth movement)
+    ONLINE.interpolate(dt);
+
+    // Send our own state
+    ONLINE.sendPlayerState({
+      x:Math.round(ps.x), y:Math.round(ps.y),
+      dir:p.dir, hp:p.hp, maxHp:p.maxHp,
+      atk:p.atk, wk:p.wk||0,
+      skin:SAVE.skin, weapon:SAVE.weapon,
     });
 
-    // Draw remote player if we have their state
-    if(ONLINE.remotePlayer){
-      this.drawRemotePlayer(this.charGfx, ONLINE.remotePlayer);
+    // HOST: send enemy and boss state to guest every 3 frames
+    if(ONLINE.isHost){
+      if(!this._syncFrame) this._syncFrame=0;
+      this._syncFrame++;
+      if(this._syncFrame%3===0){
+        ONLINE.sendEnemyState(this.enemies, this.boss.active?this.boss:null);
+      }
+      // Handle remote attacks from guest
+      if(!ONLINE._handleRemoteAttack){
+        ONLINE._handleRemoteAttack=(payload)=>{
+          // Find enemy by id and apply damage
+          const e=this.enemies.find(e=>e._id===payload.id&&!e.dead);
+          if(e) this.hitEntity(e, payload.dmg, payload.dir||1, true);
+          // Boss attack
+          if(payload.id==='boss'&&this.boss.active&&!this.boss.dead){
+            this.hitBoss(payload.dmg, payload.dir||1);
+          }
+        };
+      }
+    }
+
+    // GUEST: apply enemy sync from host
+    if(!ONLINE.isHost){
+      if(ONLINE._pendingEnemySync){
+        const sync=ONLINE._pendingEnemySync;
+        ONLINE._pendingEnemySync=null;
+        sync.enemies.forEach(es=>{
+          const e=this.enemies.find(e=>e._id===es.id);
+          if(e){
+            e.hp=es.hp;
+            if(es.dead&&!e.dead){ e.dead=true; e.dying=true; e.dyingTimer=0.35; }
+          }
+        });
+      }
+      if(ONLINE._pendingBossSync){
+        const bs=ONLINE._pendingBossSync;
+        ONLINE._pendingBossSync=null;
+        if(this.boss.active){
+          this.boss.hp=bs.hp;
+          this.boss.phase=bs.phase;
+          if(bs.dead&&!this.boss.dead){
+            this.boss.dead=true;
+            this.bossTxt.setText(`${this.ld.boss.name} defeated!`);
+            SFX.bossRoar();
+            this.time.delayedCall(900,()=>{ this.boss.gfx&&this.boss.gfx.clear(); this.victoryPosing=true; this.victoryTimer=2.0; });
+          }
+        }
+      }
+    }
+
+    // Draw remote player with full detail
+    if(ONLINE.remoteRender){
+      this.drawRemotePlayer(this.charGfx, ONLINE.remoteRender);
     }
   }
 
   drawRemotePlayer(g, state){
-    const {x,y,dir,hp,maxHp,skin,atk} = state;
-    if(!x||!y) return;
+    if(!state||!state.x) return;
+    const {x,y,dir,hp,maxHp,skin,atk,wk} = state;
     const sk = SKINS[skin] || SKINS.alvano;
     const f = dir||1;
+    const t=this.t;
 
-    // Ghost tint to distinguish from local player
-    // Draw simple but recognisable remote player
+    // Use same detail level as local player
+    // Shadow
+    g.fillStyle(0x000000,0.2); g.fillEllipse(x,y+22,30,8);
+
+    const ll=Math.sin((wk||0)*1.57)*8;
+    const rl=-Math.sin((wk||0)*1.57)*8;
+
+    // Boots
+    g.fillStyle(sk.bootCol||0x2a1404,1);
+    g.fillEllipse(x-5,y+21+ll,14,8); g.fillEllipse(x+5,y+21+rl,14,8);
+    g.fillRect(x-9,y+12+ll,9,11); g.fillRect(x+1,y+12+rl,9,11);
+
+    // Legs
+    g.fillStyle(sk.bodyCol,1);
+    g.fillRect(x-8,y+2,7,12+ll); g.fillRect(x+1,y+2,7,12+rl);
+
+    // Body/cloak
+    g.fillStyle(sk.cloakCol,1);
+    g.fillTriangle(x,y-16,x-f*16,y+8,x+f*7,y+8);
+    g.fillStyle(sk.bodyCol,1); g.fillRect(x-8,y-16,16,20);
+
+    // Arms
+    g.fillStyle(sk.bodyCol,1);
+    g.fillRect(x-18,y-16,10,4); g.fillRect(x+8,y-16,10,4);
+
+    // Weapon
     if(atk){
-      g.fillStyle(sk.accentCol,0.6);
-      g.fillRect(x+f*8,y-26,f*3,20);
+      g.fillStyle(sk.accentCol||0xc9a84c,0.9);
+      g.fillRect(x+f*10,y-26,f*3,22);
+      g.fillRect(x+f*7,y-14,f*9,3);
     }
-    // Body
-    g.fillStyle(sk.cloakCol,0.8);
-    g.fillTriangle(x,y-16,x-f*14,y+8,x+f*6,y+8);
-    g.fillStyle(sk.bodyCol,0.8);g.fillRect(x-7,y-16,14,20);
-    g.fillStyle(sk.headCol,0.9);g.fillCircle(x,y-24,9);
-    g.fillStyle(sk.hoodCol,0.7);g.fillCircle(x,y-26,7);
-    g.fillStyle(sk.eyeCol,0.9);g.fillCircle(x+f*3,y-25,2.5);
+
+    // Head
+    g.fillStyle(sk.headCol,1); g.fillCircle(x,y-24,10);
+    g.fillStyle(sk.hoodCol,0.85); g.fillCircle(x,y-26,8);
+    g.fillStyle(sk.eyeCol,0.9); g.fillCircle(x+f*4,y-25,2.5);
+    g.fillStyle(0x000000,0.6); g.fillCircle(x+f*4,y-25,1.2);
+
+    // Special features per skin
+    if(skin==='roar'){
+      g.fillStyle(sk.hairCol||0x3a1a04,1);g.fillCircle(x,y-26,14);
+      g.fillStyle(0xa06010,0.7);g.fillCircle(x,y-26,10);
+      g.fillStyle(sk.headCol,1);g.fillEllipse(x,y-24,18,14);
+      g.fillStyle(sk.eyeCol,1);g.fillEllipse(x-5,y-26,6,4);g.fillEllipse(x+5,y-26,6,4);
+    }
+    if(skin==='liam'){
+      g.fillStyle(sk.cloakCol,1);
+      g.fillTriangle(x,y-52,x-10,y-34,x+10,y-34);
+      g.fillRect(x-13,y-36,26,5);
+      g.fillStyle(0xc9a84c,0.8);g.fillCircle(x,y-46,2.5);
+    }
+    if(skin==='vampirina'){
+      g.fillStyle(0x300040,0.75);
+      g.fillTriangle(x-8,y-20,x-36,y-46,x,y-10);
+      g.fillTriangle(x+8,y-20,x+36,y-44,x,y-10);
+      g.fillStyle(0xff0030,0.9);g.fillCircle(x-4,y-25,3);g.fillCircle(x+4,y-25,3);
+    }
+    if(skin==='levi'){
+      g.fillStyle(sk.cloakCol,1);g.fillRect(x-12,y-32,24,5);
+      g.fillTriangle(x,y-44,x-9,y-32,x+9,y-32);
+    }
 
     // Name tag
+    const name=ONLINE.isHost?(MP.p2name||'P2'):(MP.p1name||'P1');
     if(!this._remoteTxt){
-      this._remoteTxt=this.add.text(0,0,ONLINE.isHost?MP.p2name:'Host',{
+      this._remoteTxt=this.add.text(0,0,name,{
         fontFamily:'monospace',fontSize:'9px',color:'#40ff80',
         stroke:'#000000',strokeThickness:2
       }).setDepth(13);
     }
-    this._remoteTxt.setPosition(x-20,y-46);
+    this._remoteTxt.setPosition(x-this._remoteTxt.width/2, y-50);
 
-    // HP bar above
-    g.fillStyle(0x002000,0.7);g.fillRect(x-18,y-42,36,4);
-    g.fillStyle(0x40ff40,1);g.fillRect(x-18,y-42,36*(hp/maxHp),4);
+    // HP bar
+    g.fillStyle(0x002000,0.7); g.fillRect(x-18,y-44,36,4);
+    g.fillStyle(0x40ff40,1); g.fillRect(x-18,y-44,Math.max(0,36*(hp/maxHp)),4);
   }
 
   // ── PLAYER UPDATE ──────────────────────────────────────────────────────────
@@ -2313,6 +2497,13 @@ class GameScene extends Phaser.Scene {
 
   hitEntity(e,dmg,dir,fromPlayer){
     if(fromPlayer) dmg=Math.max(1,dmg);
+    // If we're guest in online mode, send attack to host instead of processing locally
+    if(ONLINE.active&&!ONLINE.isHost&&fromPlayer){
+      ONLINE.sendAttack(e._id, dmg, dir);
+      // Still show local hit flash for feel
+      this.spawnHits(e.spr.x,e.spr.y,0xff4040);
+      return;
+    }
     // Critical hit — 15% chance
     let isCrit=false;
     if(fromPlayer&&Math.random()<0.15){ dmg=Math.round(dmg*1.5); isCrit=true; }
@@ -2340,6 +2531,12 @@ class GameScene extends Phaser.Scene {
   }
 
   hitBoss(dmg,dir){
+    // Guest sends boss attack to host
+    if(ONLINE.active&&!ONLINE.isHost){
+      ONLINE.sendAttack('boss', dmg, dir);
+      this.spawnHits(this.boss.spr.x,this.boss.spr.y,0xff40ff);
+      return;
+    }
     const b=this.boss;
     // Crit check
     let isCrit=Math.random()<0.12;
@@ -2451,6 +2648,35 @@ class GameScene extends Phaser.Scene {
       case "liam":{SFX.teleport();player.dashAfterImages.push({ox:ps.x,y:ps.y,life:0.6,col:0x4080ff});this.spawnHits(ps.x,ps.y,0x4080ff);ps.setX(Phaser.Math.Clamp(ps.x+player.dir*200,50,this.worldW-50));this.spawnHits(ps.x,ps.y,0x80c0ff);if(!player.specialCharges) player.specialCharges=sp.charges;player.specialCharges--;if(player.specialCharges<=0){player.specialCharges=sp.charges;player.specialCD=sp.cooldown;}this.showDmgNum(ps.x,ps.y-40,"Teleport!","#40c0ff");break;}
       case "levi":{SFX.vineSnare();const range=220;this.enemies.forEach(e=>{if(e.dead) return;if(Math.hypot(e.spr.x-ps.x,e.spr.y-ps.y)<range){e.frozen=4.0;player.vineSnares.push({x:e.spr.x,y:e.spr.y,life:4.0});}});if(this.boss.active&&!this.boss.dead&&Math.hypot(this.boss.spr.x-ps.x,this.boss.spr.y-ps.y)<range){this.boss.jumpT=4;this.boss.spr.setVelocityX(0);player.vineSnares.push({x:this.boss.spr.x,y:this.boss.spr.y,life:3.0});}player.specialCD=sp.cooldown;this.showDmgNum(ps.x,ps.y-40,"Vine Snare!","#40ff40");break;}
       case "roar":{SFX.sonicRoar();player.roarWaves.push({r:0,life:1.0,speed:280},{r:0,life:0.8,speed:240},{r:0,life:0.6,speed:200});this.enemies.forEach(e=>{if(e.dead) return;const dist=Math.hypot(e.spr.x-ps.x,e.spr.y-ps.y);if(dist<300){const pd=Math.sign(e.spr.x-ps.x)||1;e.knockback=pd*12;e.frozen=0.8;this.hitEntity(e,rnd(8,16),pd,true);}});if(this.boss.active&&!this.boss.dead&&Math.hypot(this.boss.spr.x-ps.x,this.boss.spr.y-ps.y)<300) this.boss.knockback=Math.sign(this.boss.spr.x-ps.x)*8;this.cameras.main.shake(250,0.006);player.specialCD=sp.cooldown;this.showDmgNum(ps.x,ps.y-50,"ROAR!","#ffd060");break;}
+      case "marcel":{
+        // Thunder Dash — electric blink, stun all enemies passed through
+        playTone(880,0.15,'square',0.14); playTone(1200,0.1,'square',0.1); SFX.crit();
+        if(!player.dashAfterImages) player.dashAfterImages=[];
+        if(!player.electricArcs) player.electricArcs=[];
+        const dashDist=170;
+        // Hit enemies along the path
+        for(let step=0;step<8;step++){
+          const bx=ps.x+player.dir*(step*dashDist/8);
+          player.dashAfterImages.push({ox:bx,y:ps.y,life:0.5,col:0xffee00});
+          this.enemies.forEach(e=>{
+            if(e.dead) return;
+            if(Math.abs(e.spr.x-bx)<32&&Math.abs(e.spr.y-ps.y)<52){
+              e.frozen=2.0;
+              this.hitEntity(e,rnd(14,22),player.dir,true);
+              this.spawnHits(e.spr.x,e.spr.y,0xffee00);
+            }
+          });
+        }
+        ps.setX(ps.x+player.dir*dashDist);
+        player.inv=true; player.invTimer=0.35;
+        // Spark trail
+        for(let i=0;i<8;i++) player.electricArcs.push({x:ps.x+rnd(-30,30),y:ps.y-rnd(10,40),life:0.5,dx:rnd(-20,20),dy:rnd(-15,5),col:0xffee00});
+        this.cameras.main.shake(150,0.005);
+        this.cameras.main.flash(180,255,238,0,false);
+        player.specialCD=sp.cooldown;
+        this.showDmgNum(ps.x,ps.y-50,'THUNDER DASH!','#ffee00');
+        break;
+      }
     }
   }
 
@@ -2462,7 +2688,57 @@ class GameScene extends Phaser.Scene {
       if(pl.dashAfterImages) pl.dashAfterImages=pl.dashAfterImages.filter(a=>{a.life-=dt*2.5;if(a.life<=0) return false;g.fillStyle(a.col,a.life*0.4);g.fillRect((a.ox||a.x)-8,a.y-22,16,44);return true;});
       if(pl.teleportFlash>0){pl.teleportFlash=Math.max(0,(pl.teleportFlash||0)-dt*3);g.fillStyle(0x4080ff,pl.teleportFlash*0.3);g.fillCircle(pl.spr.x,pl.spr.y-20,40*pl.teleportFlash);}
       if(pl.vineSnares) pl.vineSnares=pl.vineSnares.filter(vs=>{vs.life-=dt;if(vs.life<=0) return false;const al=Math.min(1,vs.life)*0.7;for(let i=0;i<6;i++){const vx=vs.x-22+i*9+Math.sin(this.t*3+i)*3,vy=vs.y+8,vh=25+i%3*9;g.fillStyle(0x208010,al);g.fillRect(vx,vy-vh,3,vh);g.fillStyle(0x40c020,al*0.6);g.fillEllipse(vx+2,vy-vh,9,6);}return true;});
-      if(pl.roarWaves) pl.roarWaves=pl.roarWaves.filter(rw=>{rw.r+=rw.speed*dt;rw.life-=dt;if(rw.life<=0) return false;const al=rw.life*0.6;g.lineStyle(3,0xffd060,al);g.strokeCircle(pl.spr.x,pl.spr.y-20,rw.r);g.lineStyle(2,0xffa020,al*0.4);g.strokeCircle(pl.spr.x,pl.spr.y-20,rw.r*0.7);return true;});
+      // Marcel — electric arc trail
+      if(pl.electricArcs){
+        pl.electricArcs=pl.electricArcs.filter(a=>{
+          a.life-=dt*2; if(a.life<=0) return false;
+          a.x+=a.dx*dt; a.y+=a.dy*dt;
+          g.lineStyle(1.5,a.col||0xffee00,a.life*0.8);
+          // Jagged lightning line
+          const x1=a.x,y1=a.y;
+          const x2=a.x+rnd(-12,12),y2=a.y+rnd(-8,8);
+          g.lineBetween(x1,y1,x2,y2);
+          g.fillStyle(a.col||0xffee00,a.life*0.5);
+          g.fillCircle(a.x,a.y,2);
+          return true;
+        });
+      }
+      // Marcel — spark aura when moving fast
+      if(SAVE.skin==='marcel'||SAVE.p2skin==='marcel'){
+        const mps=pl.spr;
+        if(Math.abs(mps.body?.velocity?.x||0)>100){
+          // Cheek spark
+          g.fillStyle(0xffee00,0.4+Math.sin(this.t*8)*0.3);
+          g.fillCircle(mps.x-5,mps.y-22,4+Math.sin(this.t*10)*1.5);
+          g.fillCircle(mps.x+5,mps.y-22,4+Math.sin(this.t*10+1)*1.5);
+        }
+      }
+      // Marcel thunderbolts (superpower)
+      if(pl.thunderbolts){
+        pl.thunderbolts=pl.thunderbolts.filter(tb=>{
+          tb.life-=dt*2.5; if(tb.life<=0) return false;
+          const alpha=tb.life;
+          // Main bolt — jagged line from sky to ground
+          g.lineStyle(3,0xffee00,alpha);
+          const segments=8;
+          let py=tb.y0||0;
+          for(let s=0;s<segments;s++){
+            const ny=py+(tb.y1-tb.y0)/segments;
+            const jag=rnd(-14,14);
+            g.lineBetween(tb.x+jag,py,tb.x+rnd(-10,10),ny);
+            py=ny;
+          }
+          // Glow
+          g.fillStyle(0xffee00,alpha*0.25);
+          g.fillRect(tb.x-15,tb.y0||0,30,tb.y1-(tb.y0||0));
+          // Impact flash at bottom
+          g.fillStyle(0xffffff,alpha*0.6);
+          g.fillCircle(tb.x,tb.y1,16*alpha);
+          g.fillStyle(0xffee00,alpha*0.8);
+          g.fillCircle(tb.x,tb.y1,8*alpha);
+          return true;
+        });
+      }
     });
   }
   updateHpOrbs(dt){
@@ -3295,6 +3571,43 @@ class GameScene extends Phaser.Scene {
         SFX.bossRoar();
         break;
       }
+      case 'marcel':{
+        // Thunderstorm — 5 lightning bolts strike from sky
+        player.superTimer=3;
+        player.superActive=true;
+        player.superCD=SUPERPOWERS.marcel.cooldown;
+        player.thunderbolts=[];
+        // Pick targets — random enemies or positions
+        const targets=[];
+        const aliveEnemies=this.enemies.filter(e=>!e.dead);
+        for(let i=0;i<5;i++){
+          if(aliveEnemies.length>0){
+            const tgt=aliveEnemies[Math.floor(Math.random()*aliveEnemies.length)];
+            targets.push({x:tgt.spr.x,y:tgt.spr.y,enemy:tgt});
+          } else {
+            targets.push({x:ps.x+rnd(-200,200),y:this.groundY-20,enemy:null});
+          }
+        }
+        targets.forEach((tgt,i)=>{
+          this.time.delayedCall(i*350,()=>{
+            // Lightning bolt
+            player.thunderbolts=(player.thunderbolts||[]);
+            player.thunderbolts.push({x:tgt.x,life:0.5,y0:0,y1:tgt.y});
+            // Damage
+            if(tgt.enemy&&!tgt.enemy.dead) this.hitEntity(tgt.enemy,rnd(35,55),0,true);
+            if(this.boss.active&&!this.boss.dead&&Math.abs(this.boss.spr.x-tgt.x)<60) this.hitBoss(rnd(25,40),0);
+            // Area damage
+            this.enemies.forEach(e=>{if(!e.dead&&Math.abs(e.spr.x-tgt.x)<40)this.hitEntity(e,rnd(15,25),0,true);});
+            // Screen flash
+            this.cameras.main.flash(120,255,238,100,false);
+            playTone(220,0.3,'sawtooth',0.2); playNoise(0.2,0.2,400);
+            this.cameras.main.shake(200,0.007);
+            this.spawnHits(tgt.x,tgt.y,0xffee00);
+          });
+        });
+        this.showDmgNum(ps.x,ps.y-60,'THUNDERSTORM!','#ffee00');
+        break;
+      }
     }
   }
 
@@ -3507,6 +3820,143 @@ class GameScene extends Phaser.Scene {
       g.fillStyle(0xff8090,0.4);g.fillCircle(x-4,y-35+bob,5);g.fillCircle(x+4,y-35+bob,5);
       g.fillStyle(0xffffff,0.9);g.fillTriangle(x-3,y-30+bob,x-2,y-30+bob,x-2.5,y-26+bob);g.fillTriangle(x+3,y-30+bob,x+2,y-30+bob,x+2.5,y-26+bob);
       g.fillStyle(0x8000c0,0.25+Math.sin(this.t*4)*0.15);g.fillCircle(x,y+20,12+Math.sin(this.t*3)*4);
+      return;
+    }
+
+    // ── MARCEL — Half human, half Raichu ─────────────────────────────────────
+    if(SAVE.skin==='marcel'){
+      const t=this.t;
+      const isMoving=Math.abs(ps.body.velocity.x)>20;
+
+      // Electric aura when moving
+      if(isMoving){
+        g.fillStyle(0xffee00,0.06+Math.sin(t*8)*0.04);
+        g.fillCircle(x,y-16+bob,32);
+      }
+
+      // Shadow
+      g.fillStyle(0x000000,0.2);g.fillEllipse(x,y+22,30,8);
+
+      // Zigzag lightning bolt tail — behind body, animated
+      const tailX=x-f*8, tailBaseY=y+8;
+      const tailSway=Math.sin(t*3)*6;
+      g.fillStyle(sk.accentCol,0.9);
+      // Zigzag segments
+      const tailPts=[
+        [tailX,tailBaseY],
+        [tailX-f*10,tailBaseY-8+tailSway],
+        [tailX-f*5,tailBaseY-16+tailSway],
+        [tailX-f*16,tailBaseY-22+tailSway],
+        [tailX-f*10,tailBaseY-30+tailSway],
+        [tailX-f*20,tailBaseY-38+tailSway],
+      ];
+      for(let i=0;i<tailPts.length-1;i++){
+        g.fillStyle(i===tailPts.length-2?0xffee00:sk.accentCol,0.9);
+        g.lineStyle(4,i===tailPts.length-2?0xffee00:sk.bodyCol,0.9);
+        g.lineBetween(tailPts[i][0],tailPts[i][1],tailPts[i+1][0],tailPts[i+1][1]);
+      }
+      // Tail tip — brown diamond
+      g.fillStyle(sk.hairCol,1);
+      g.fillTriangle(tailPts[5][0]-6,tailPts[5][1],tailPts[5][0]+6,tailPts[5][1],tailPts[5][0],tailPts[5][1]-10);
+
+      // Legs — brown boots
+      g.fillStyle(sk.bootCol,1);
+      g.fillEllipse(x-5,y+21+ll,13,7);g.fillEllipse(x+5,y+21+rl,13,7);
+      g.fillRect(x-9,y+12+ll,9,11);g.fillRect(x+1,y+12+rl,9,11);
+      // Trousers — dark brown
+      g.fillStyle(sk.hairCol,1);
+      g.fillRect(x-8,y+2,7,12+ll);g.fillRect(x+1,y+2,7,12+rl);
+
+      // Body — yellow/brown tunic with lightning bolt emblem
+      g.fillStyle(sk.cloakCol,1);
+      g.fillRect(x-9,y-18,18,22);
+      // Lightning bolt on chest
+      g.fillStyle(sk.accentCol,0.9);
+      g.fillTriangle(x-2,y-16,x+4,y-16,x+1,y-10);
+      g.fillTriangle(x-3,y-10,x+3,y-10,x-1,y-4);
+      // Belt
+      g.fillStyle(sk.hairCol,1);g.fillRect(x-9,y-1,18,4);
+      g.fillStyle(sk.accentCol,0.8);g.fillCircle(x,y+1,3);
+
+      // Arms
+      g.fillStyle(sk.cloakCol,1);
+      g.fillRect(x-18,y-16,10,4);g.fillRect(x+8,y-16,10,4);
+      // Gloves — fingerless brown
+      g.fillStyle(sk.bootCol,1);
+      g.fillRect(x-19,y-13,9,4);g.fillRect(x+9,y-13,9,4);
+
+      // Weapon
+      if(p.atk){
+        const ww=WEAPONS[SAVE.weapon];
+        g.fillStyle(sk.accentCol,1);g.fillRect(x+f*10,y-26+bob,f*3,22);
+        g.fillStyle(sk.bodyCol,1);g.fillRect(x+f*7,y-14+bob,f*9,3);
+        // Electric sparks on weapon during attack
+        g.fillStyle(0xffee00,0.8);
+        g.fillCircle(x+f*11,y-26+bob+rnd(-4,4),3+Math.sin(t*12)*1.5);
+      }
+
+      // HEAD — round, Raichu-like
+      g.fillStyle(sk.headCol,1);g.fillCircle(x,y-28+bob,11);// main head
+      // Slightly wider at cheeks
+      g.fillStyle(sk.headCol,1);g.fillEllipse(x,y-26+bob,22,18);
+
+      // Raichu EARS — large, pointed, brown outside with dark centre
+      // Left ear
+      g.fillStyle(sk.hairCol,1);
+      g.fillTriangle(x-9,y-34+bob,x-16,y-58+bob,x-4,y-36+bob);
+      g.fillStyle(0x1a0a04,0.8);
+      g.fillTriangle(x-9,y-34+bob,x-14,y-54+bob,x-6,y-36+bob);
+      // Yellow ear tips
+      g.fillStyle(sk.accentCol,0.9);
+      g.fillCircle(x-13,y-56+bob,3);
+      // Right ear
+      g.fillStyle(sk.hairCol,1);
+      g.fillTriangle(x+9,y-34+bob,x+16,y-58+bob,x+4,y-36+bob);
+      g.fillStyle(0x1a0a04,0.8);
+      g.fillTriangle(x+9,y-34+bob,x+14,y-54+bob,x+6,y-36+bob);
+      g.fillStyle(sk.accentCol,0.9);
+      g.fillCircle(x+13,y-56+bob,3);
+
+      // CHEEK PATCHES — red circles, glow when using powers
+      const chkPower=p.specialCD<0.5||p.superActive;
+      const chkAlpha=chkPower?0.9+Math.sin(t*10)*0.1:0.7;
+      const chkSize=chkPower?6+Math.sin(t*8)*1.5:5;
+      g.fillStyle(0xff2020,chkAlpha);
+      g.fillCircle(x-6,y-25+bob,chkSize);
+      g.fillCircle(x+6,y-25+bob,chkSize);
+      // Electric sparks from cheeks when powered up
+      if(chkPower){
+        g.lineStyle(1,0xffee00,0.7);
+        g.lineBetween(x-6,y-22+bob,x-10,y-18+bob);
+        g.lineBetween(x+6,y-22+bob,x+10,y-18+bob);
+        g.fillStyle(0xffee00,0.6);
+        g.fillCircle(x-10,y-18+bob,2);g.fillCircle(x+10,y-18+bob,2);
+      }
+
+      // Eyes — large, amber, friendly
+      g.fillStyle(sk.eyeCol,1);g.fillEllipse(x-4,y-30+bob,7,6);g.fillEllipse(x+4,y-30+bob,7,6);
+      g.fillStyle(0x000000,1);g.fillCircle(x-4,y-30+bob,2.5);g.fillCircle(x+4,y-30+bob,2.5);
+      g.fillStyle(0xffffff,0.7);g.fillCircle(x-3,y-31+bob,1.2);g.fillCircle(x+5,y-31+bob,1.2);
+
+      // Nose — small round Pikachu-style
+      g.fillStyle(0x3a1a04,0.6);g.fillCircle(x,y-26+bob,1.8);
+
+      // Smile
+      g.fillStyle(0x3a1a04,0.4);g.fillRect(x-3,y-23+bob,6,1.5);
+
+      // Constant cheek-to-cheek arc when still
+      if(!isMoving&&Math.sin(t*6)>0.5){
+        g.lineStyle(1,0xffee00,0.4+Math.sin(t*8)*0.3);
+        g.lineBetween(x-6,y-25+bob,x+6,y-25+bob);
+      }
+
+      // Running spark trail
+      if(isMoving){
+        for(let i=0;i<2;i++){
+          g.fillStyle(0xffee00,0.3+Math.random()*0.3);
+          g.fillCircle(x-f*rnd(10,30)+rnd(-5,5),y-rnd(5,25),rnd(2,4));
+        }
+      }
       return;
     }
 
@@ -5027,25 +5477,27 @@ class GameScene extends Phaser.Scene {
       g.fillEllipse(lx2,H*0.58,100,14);
     }
 
-    // Rocky terrain mid
+    // Rocky terrain mid (larger steps = fewer draw calls)
     g.fillStyle(0x1a0604,1);
-    for(let i=0;i<W;i+=6){
+    for(let i=0;i<W;i+=18){
       const ry=H*0.6+Math.sin(i*0.03+1.5)*20+Math.sin(i*0.015)*15;
-      g.fillRect(cx+i,ry,6,H-ry);
+      g.fillRect(cx+i,ry,18,H-ry);
     }
 
-    // Lava floor — glowing cracks
+    // Lava floor — glowing cracks (fixed positions, no rnd per frame)
     g.fillStyle(0x280802,1);g.fillRect(cx,this.groundY,this.worldW,62);
-    for(let i=0;i<18;i++){
-      const cx2=(i*220+cx*0.6)%(this.worldW)+cx;
+    const crackSeeds=[40,80,140,170,220,260,310,360,400,440,480,520,560,610,650,690,730,770];
+    crackSeeds.forEach((seed,i)=>{
+      const cx2=(seed*4+cx*0.6)%(this.worldW)+cx;
+      const cw=20+seed%40; // fixed width per crack
       g.fillStyle(0xff4400,0.3+Math.sin(t*3+i)*0.2);
-      g.fillRect(cx2,this.groundY,rnd(20,60),3);
+      g.fillRect(cx2,this.groundY,cw,3);
       g.fillStyle(0xff8800,0.15+Math.sin(t*4+i)*0.1);
-      g.fillRect(cx2,this.groundY,rnd(10,30),6);
-    }
+      g.fillRect(cx2,this.groundY,Math.floor(cw*0.5),6);
+    });
 
-    // Floating ember particles
-    for(let i=0;i<20;i++){
+    // Floating ember particles (deterministic, no random per frame)
+    for(let i=0;i<16;i++){
       const ex2=(i*190+t*25+cx)%(this.worldW)+cx;
       const ey2=this.groundY-20-((t*40+i*30)%(H*0.5));
       g.fillStyle(0xff6600,0.5+Math.sin(t*4+i)*0.3);

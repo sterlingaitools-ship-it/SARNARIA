@@ -1309,6 +1309,7 @@ var GameScene = new Phaser.Class({
     this.gameOver = false;
     this.win      = false;
     this.bossActive   = false;
+    this.bossTriggered= false;
     this.bossHp       = 0;
     this.bossMaxHp    = 0;
     this.bossX        = W * 2.5;
@@ -1596,13 +1597,13 @@ var GameScene = new Phaser.Class({
         stunTimer: 0
       });
     }
-    // Boss spawns at end of level
+    // Boss: pre-position but NOT active until player reaches end
     var lv = LEVELS[GS.levelIdx];
     this.bossMaxHp = lv.boss.hp;
     this.bossHp = lv.boss.hp;
     this.bossX = this.levelWidth - 320;
     this.bossY = GROUND_Y;
-    this.bossActive = true;
+    this.bossActive = false;
   },
 
   // ── SETUP TOUCH ───────────────────────────────────────────
@@ -1867,12 +1868,13 @@ var GameScene = new Phaser.Class({
     // Boss reach end trigger (boss encounter at end of level)
     if (this.px > this.levelWidth - 450 && !this.bossTriggered) {
       this.bossTriggered = true;
+      this.bossActive = true;
       sfxBoss();
       this._showNotif(LEVELS[GS.levelIdx].boss.name + ' approaches!');
     }
 
     // Check win condition
-    if (!this.bossActive && this.px > this.levelWidth - 80) {
+    if (this.bossTriggered && !this.bossActive && this.px > this.levelWidth - 80) {
       this._triggerLevelComplete();
     }
   },
@@ -3063,9 +3065,10 @@ var GameScene = new Phaser.Class({
       self.gameOver = false;
       self.px = 120; self.py = GROUND_Y;
       self.pvx = 0; self.pvy = 0;
-      self.enemyList.forEach(function(en) { en.alive = true; en.hp = en.maxHp; });
+      self.bossTriggered = false;
+      self.bossActive = false;
       self.bossHp = self.bossMaxHp;
-      self.bossActive = true;
+      self.enemyList.forEach(function(en) { en.alive = true; en.hp = en.maxHp; });
     }}];
   },
 
@@ -3450,25 +3453,26 @@ var config = {
 // synced to game state. This avoids bitmap fonts and keeps file lean.
 var domLabels = {};
 
-function ensureLabel(id, style) {
+function ensureLabel(id) {
   if (domLabels[id]) return domLabels[id];
   var el = document.createElement('div');
   el.id = 'lbl_' + id;
-  el.style.cssText = 'position:absolute;pointer-events:none;user-select:none;' + (style || '');
+  el.style.cssText = 'position:absolute;pointer-events:none;user-select:none;';
   document.getElementById('game-container').appendChild(el);
   domLabels[id] = el;
   return el;
 }
 
 function setLabel(id, text, x, y, style) {
-  var el = ensureLabel(id, style);
+  var el = ensureLabel(id);
+  el.style.cssText = 'position:absolute;pointer-events:none;user-select:none;' + (style || '');
   el.style.left = x + 'px';
   el.style.top  = y + 'px';
   el.textContent = text;
 }
 
 function hideLabel(id) {
-  if (domLabels[id]) domLabels[id].textContent = '';
+  if (domLabels[id]) domLabels[id].style.cssText = 'display:none;position:absolute;';
 }
 
 // ── START BUTTON ─────────────────────────────────────────────
@@ -3476,15 +3480,6 @@ document.getElementById('start-btn').addEventListener('click', function() {
   initAudio();
   document.getElementById('start-overlay').style.display = 'none';
   var game = new Phaser.Game(config);
-
-  // Set up DOM labels after game boots
-  game.events.on('ready', function() {
-    // Title
-    setLabel('title', 'SONARIA', 300, 40,
-      'font:bold 52px Georgia,serif;color:#e8d5a3;text-shadow:0 0 30px #4a9f4a;letter-spacing:4px;');
-    setLabel('subtitle', 'Heart of the Forest', 290, 96,
-      'font:14px Georgia,serif;color:#7ab87a;letter-spacing:5px;');
-  });
 
   // Per-frame labels update
   function updateLabels() {

@@ -28,8 +28,9 @@ canvas { display:block; touch-action:none; }
   <button id="mute-btn" onclick="toggleMute()" title="Toggle Sound">🔊</button></div>
 <script>
 // ── ONLINE MULTIPLAYER ────────────────────────────────────────────────────────
-const SUPABASE_URL = 'https://utcmdkdlkixubqgxkceg.supabase.co/';
-const SUPABASE_KEY = 'sb_publishable_nl7Ojm1L_LQAieLRf5FfIQ_ac_Uhga4';
+const SUPABASE_URL = window.SONARIA_CONFIG?.supabaseUrl || 'https://your-project.supabase.co';
+const SUPABASE_KEY = window.SONARIA_CONFIG?.supabaseKey || 'your-anon-key';
+
 
 const ONLINE = {
   active: false,
@@ -2386,17 +2387,36 @@ class GameScene extends Phaser.Scene {
       if(atkDown&&!p.atk){ p.atkHeld+=dt; }
       if(atkJustUp){
         if(p.atkHeld>0.5){
-          // Throw!
           this.throwAxe();
           p.atkHeld=0;
         } else {
-          // Normal swing
           p.atk=true; p.atkTimer=WEAPONS.axe.speed;
           p.atkHeld=0;
           this.doAttack();
         }
       }
-    } else if(SAVE.weapon!=='axe'){
+    // Bow charge — hold for power shot
+    } else if(SAVE.weapon==='bow'){
+      if(atkDown&&!p.atk){ p.bowCharge=(p.bowCharge||0)+dt; }
+      if(atkJustUp){
+        const charge=p.bowCharge||0;
+        p.bowCharge=0;
+        p.atk=true; p.atkTimer=WEAPONS.bow.speed;
+        if(charge>0.6){
+          // Power shot — 3 arrows spread, stun
+          const w=WEAPONS.bow;
+          [-1,0,1].forEach((spread,i)=>{
+            this.projectiles.push({x:ps.x+p.dir*20,y:ps.y-10+(spread*10),vx:w.projSpeed*p.dir,vy:spread*60,dmg:rnd(w.dmg[0],w.dmg[1])*2,color:0xffcc00,life:1.6,splash:false,r:7,owner:'player',stun:true});
+          });
+          this.showDmgNum(ps.x,ps.y-50,'POWER SHOT!','#ffcc00');
+          this.cameras.main.shake(100,0.004);
+          SFX.arrowShoot();playTone(880,0.1,'sine',0.1);
+        } else {
+          this.doAttack();
+        }
+      }
+      if(atkJustDown&&!atkDown){ p.bowCharge=0; }
+    } else {
       p.atkHeld=0;
       if(atkJustDown&&!p.atk){
         const w=WEAPONS[SAVE.weapon];
@@ -2450,19 +2470,18 @@ class GameScene extends Phaser.Scene {
     if(!ax.returning&&ax.life<1.0) ax.returning=true;
 
     if(ax.returning){
-      // Home toward player
-      const dx=ps.x-ax.x, dy=ps.y-20-ax.y;
+      const dx=ps.x-ax.x, dy=(ps.y-20)-ax.y;
       const dist=Math.hypot(dx,dy);
-      const spd=520;
-      ax.vx=lerp(ax.vx,(dx/dist)*spd,dt*6);
-      ax.vy=lerp(ax.vy,(dy/dist)*spd,dt*6);
-      // Catch
       if(dist<30){
         this.thrownAxe=null;
         this.player.axeThrown=false;
         this.showDmgNum(ps.x,ps.y-40,'Caught!','#c9a84c');
         return;
       }
+      const spd=520;
+      const norm=dist>0?dist:1; // guard against NaN
+      ax.vx=lerp(ax.vx,(dx/norm)*spd,dt*6);
+      ax.vy=lerp(ax.vy,(dy/norm)*spd,dt*6);
     } else {
       ax.vy+=400*dt; // gravity
     }
@@ -2817,6 +2836,7 @@ class GameScene extends Phaser.Scene {
         if(e.dead||hit) return;
         if(Math.abs(e.spr.x-pr.x)<22&&Math.abs(e.spr.y-pr.y)<28){
           this.hitEntity(e,pr.dmg,Math.sign(pr.vx),true);
+          if(pr.stun) e.frozen=2.0; // power shot stuns
           if(pr.splash) this.splashDmg(pr.x,pr.y,60,pr.dmg*0.5);
           hit=true;
         }
@@ -3831,6 +3851,9 @@ class GameScene extends Phaser.Scene {
 
     // Bob animation
     const bob=ps.body.blocked.down?Math.sin(this.t*8)*1.5+floatOff:floatOff;
+    // Leg walk offsets — declared here so ALL character blocks can use them
+    const ll=ps.body.blocked.down?Math.sin(wk*1.57)*9:0;
+    const rl=ps.body.blocked.down?-Math.sin(wk*1.57)*9:0;
 
     // ── VAMPIRINA ─────────────────────────────────────────────────────────────
     if(SAVE.skin==='vampirina'){
@@ -4014,9 +4037,6 @@ class GameScene extends Phaser.Scene {
     // ── SHARED SHADOW ────────────────────────────────────────────────────────
     g.fillStyle(0x000000,0.22);g.fillEllipse(x,y+22,32,9);
 
-    const ll=ps.body.blocked.down?Math.sin(wk*1.57)*9:0;
-    const rl=ps.body.blocked.down?-Math.sin(wk*1.57)*9:0;
-
     // ── LEVI THE FOREST RANGER ───────────────────────────────────────────────
     if(SAVE.skin==='levi'){
       // Boots — worn leather, muddy soles
@@ -4187,18 +4207,23 @@ class GameScene extends Phaser.Scene {
     if(p.atk){
       if(SAVE.weapon==='bow'){
         g.fillRect(x,y-14,f*20,4);
-        // Bow shape — filled arc via triangles
         g.fillStyle(0x806020,1);
         g.fillTriangle(x+f*22,y-28,x+f*19,y-26,x+f*18,y-14);
         g.fillTriangle(x+f*22,y-2,x+f*19,y-4,x+f*18,y-14);
-        // Bow string — thin rect
         g.fillStyle(0xe0d080,0.8);g.fillRect(x+f*14,y-28,f*1,26);
-        // Arrow
-        g.fillStyle(0xc0a030,1);g.fillRect(x+f*8,y-15,f*22,2);
-        g.fillStyle(0xd0c060,1);g.fillTriangle(x+f*30,y-14,x+f*24,y-17,x+f*24,y-11);
-        g.fillStyle(0xa06020,0.8);
-        g.fillTriangle(x+f*8,y-14,x+f*12,y-18,x+f*14,y-14);
-        g.fillTriangle(x+f*8,y-14,x+f*12,y-10,x+f*14,y-14);
+        // Charge glow
+        if(p.bowCharge>0){
+          const ch=Math.min(1,p.bowCharge/0.6);
+          g.fillStyle(0xffcc00,ch*0.45);g.fillCircle(x+f*14,y-14,10*ch+4);
+          g.fillStyle(0xffee00,0.9);g.fillRect(x+f*8,y-15,f*(14+10*ch),2);
+          g.fillStyle(0xffcc00,0.9);g.fillTriangle(x+f*(22+10*ch),y-14,x+f*(16+10*ch),y-18,x+f*(16+10*ch),y-10);
+        } else {
+          g.fillStyle(0xc0a030,1);g.fillRect(x+f*8,y-15,f*22,2);
+          g.fillStyle(0xd0c060,1);g.fillTriangle(x+f*30,y-14,x+f*24,y-17,x+f*24,y-11);
+          g.fillStyle(0xa06020,0.8);
+          g.fillTriangle(x+f*8,y-14,x+f*12,y-18,x+f*14,y-14);
+          g.fillTriangle(x+f*8,y-14,x+f*12,y-10,x+f*14,y-14);
+        }
       } else if(SAVE.weapon==='axe'){
         g.fillRect(x,y-14,f*22,5);
         g.fillStyle(0x6a3a10,1);g.fillRect(x+f*14,y-28,f*4,28);
@@ -4255,7 +4280,7 @@ class GameScene extends Phaser.Scene {
         g.fillStyle(0x6040a0,1);g.fillRect(x+f*10,y-32,f*3,30);
         g.fillStyle(0x8040ff,0.85);g.fillCircle(x+f*12,y-34,7);
         g.fillStyle(0xc080ff,0.5);g.fillCircle(x+f*11,y-36,4);
-        g.lineStyle(1,0xaa60ff,0.35);g.strokeCircle(x+f*12,y-34,11);
+        g.fillStyle(0xaa60ff,0.12);g.fillCircle(x+f*12,y-34,12);
       } else {
         g.fillStyle(0x8090b0,0.9);g.fillRect(x+f*10,y-24,f*3,22);
         g.fillStyle(0xc9a84c,1);g.fillRect(x+f*7,y-14,f*10,3);
@@ -4314,11 +4339,13 @@ class GameScene extends Phaser.Scene {
     }
     // Shield visual when blocking
     if(p.blocking&&SAVE.weapon==='shield'){
-      g.fillStyle(0x4060a0,0.95);
-      g.fillRect(x+f*10,y-36+bob,f*6,38);
+      g.fillStyle(0x4060a0,0.95);g.fillRect(x+f*10,y-36+bob,f*6,38);
       g.fillStyle(0x6090c0,0.8);g.fillRect(x+f*12,y-34+bob,f*4,8);
       g.fillStyle(0xc9a84c,0.7);g.fillCircle(x+f*13,y-18+bob,5);
-      g.lineStyle(1,0x8080c0,0.6);g.strokeRect(x+f*10,y-36+bob,f*6,38);
+      // Border via fills
+      g.fillStyle(0x8080c0,0.5);
+      g.fillRect(x+f*10,y-36+bob,f*6,2);g.fillRect(x+f*10,y-36+bob+38,f*6,2);
+      g.fillRect(x+f*10,y-36+bob,2,38);g.fillRect(x+f*10+f*6-2,y-36+bob,2,38);
     }
   }
 

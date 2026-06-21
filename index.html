@@ -21,7 +21,42 @@ canvas { display:block; touch-action:none; }
   display:flex; align-items:center; justify-content:center;
   touch-action:manipulation; user-select:none;
 }
+
+/* ── HOME / TITLE SCREEN (v17) ───────────────────────────── */
+#sonaria-home {
+  position:absolute; inset:0; z-index:600;
+  display:flex; flex-direction:column;
+  align-items:center; justify-content:center; text-align:center;
+  background:radial-gradient(ellipse at 50% 42%, #16291b 0%, #0d1a0d 50%, #07070a 100%);
+  font-family:'Georgia', serif;
+}
+#sonaria-home h1 {
+  font:700 58px 'Georgia', serif;
+  color:#e8d5a3; letter-spacing:8px; margin-bottom:10px;
+  text-shadow:0 0 40px #4a9f4a, 0 0 14px rgba(74,159,74,0.85), 0 2px 4px #000;
+}
+#sonaria-home .sub {
+  font:15px 'Georgia', serif;
+  color:#7ab87a; letter-spacing:8px; text-transform:uppercase;
+  margin-bottom:46px;
+}
+#sonaria-home .begin {
+  background:#2d6e2d; color:#e8d5a3; border:none;
+  padding:16px 56px; font:20px 'Georgia', serif; letter-spacing:2px;
+  cursor:pointer; border-radius:6px;
+  box-shadow:0 0 20px rgba(74,159,74,0.27), 0 4px 8px #000;
+  transition:all .2s; touch-action:manipulation;
+  -webkit-tap-highlight-color:rgba(74,159,74,0.3);
+}
+#sonaria-home .begin:hover {
+  background:#3d8e3d; transform:translateY(-1px);
+  box-shadow:0 0 30px rgba(74,159,74,0.53), 0 4px 8px #000;
+}
+#sonaria-home .begin:active { transform:translateY(0); }
+#sonaria-home .hs { margin-top:24px; font:12px monospace; color:#5f7a5f; letter-spacing:2px; }
+#sonaria-home .ver { position:absolute; bottom:10px; right:14px; font:11px monospace; color:#3f5a3f; letter-spacing:1px; }
 </style>
+
 </head>
 <body>
 <div id="game-container">
@@ -31,120 +66,158 @@ canvas { display:block; touch-action:none; }
 const SUPABASE_URL = 'https://your-project.supabase.co';
 const SUPABASE_KEY = 'your-anon-key';
 
+// ── ONLINE MULTIPLAYER — 4-6 PLAYER ─────────────────────────────────────────
 const ONLINE = {
-  active: false,
-  isHost: false,
+  active:   false,
+  isHost:   false,
   roomCode: null,
-  channel: null,
-  client: null,
-  // Remote player — interpolated position
-  remotePlayer: null,
-  remoteRender: null, // smooth interpolated state
+  channel:  null,
+  client:   null,
+  myId:     null,       // UUID assigned on join/host
+
+  // Map of peerId → { state:{x,y,dir,hp,maxHp,skin,atk,wk}, render:{…} }
+  peers:    {},
+
   lastSent: 0,
-  // Callbacks
-  _onEnemySync: null,
-  _onBossSync: null,
+  _onStart: null,
+  _pendingEnemySync: null,
+  _pendingBossSync:  null,
+  _handleRemoteAttack: null,
+
+  // Deterministic peer colours — up to 6 remote players
+  PEER_COLORS: ['#40ff80','#40c0ff','#ff80ff','#ff8040','#ffee44','#c080ff'],
 
   init(){
-    if(typeof window.supabase === 'undefined') return false;
-    this.client = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    if(typeof window.supabase==='undefined') return false;
+    this.client=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
     return true;
   },
 
-  genCode(){
-    return Math.floor(1000+Math.random()*9000).toString();
-  },
+  genCode(){ return Math.floor(1000+Math.random()*9000).toString(); },
 
-  async host(code, onJoin, onState, onDisconnect){
-    if(!this.client) return false;
-    this.roomCode = code; this.isHost = true;
-    this.channel = this.client.channel(`sonaria-${code}`,{config:{broadcast:{self:false}}});
-    this.channel
-      .on('broadcast',{event:'join'},()=> onJoin&&onJoin())
-      .on('broadcast',{event:'pstate'},(d)=> onState&&onState(d.payload))
-      .on('broadcast',{event:'attack'},(d)=> this._handleRemoteAttack&&this._handleRemoteAttack(d.payload))
-      .on('broadcast',{event:'leave'},()=> onDisconnect&&onDisconnect())
-      .subscribe();
-    return true;
-  },
+  genId(){ return Math.random().toString(36).slice(2,10); },
 
-  async join(code, onHostState, onEnemySync, onBossSync, onDisconnect){
+  // Subscribe to the shared room channel.
+  // Both host and guests call this — host sets isHost=true first.
+  async connect(code){
     if(!this.client) return false;
-    this.roomCode = code; this.isHost = false;
-    this._onEnemySync = onEnemySync;
-    this._onBossSync = onBossSync;
-    this.channel = this.client.channel(`sonaria-${code}`,{config:{broadcast:{self:false}}});
+    this.roomCode = code;
+    this.myId     = this.genId();
+    if(this.channel){ this.client.removeChannel(this.channel); }
+    this.channel = this.client.channel(`son-${code}`,{config:{broadcast:{self:false}}});
+
     this.channel
-      .on('broadcast',{event:'pstate'},(d)=> onHostState&&onHostState(d.payload))
-      .on('broadcast',{event:'enemies'},(d)=> onEnemySync&&onEnemySync(d.payload))
-      .on('broadcast',{event:'boss'},(d)=> onBossSync&&onBossSync(d.payload))
-      .on('broadcast',{event:'start'},(d)=>{ this._onStart&&this._onStart(d.payload); })
-      .on('broadcast',{event:'leave'},()=> onDisconnect&&onDisconnect())
+      // another player's position / state
+      .on('broadcast',{event:'ps'},(d)=>{
+        const pl=d.payload;
+        if(!pl||!pl.id) return;
+        if(!this.peers[pl.id]) this.peers[pl.id]={state:null,render:null,name:pl.name||'Player',connected:true};
+        this.peers[pl.id].state   = pl;
+        this.peers[pl.id].name    = pl.name||this.peers[pl.id].name;
+        this.peers[pl.id].connected = true;
+      })
+      // enemy state broadcast (host only sends)
+      .on('broadcast',{event:'es'},(d)=>{
+        if(!this.isHost) this._pendingEnemySync=d.payload;
+      })
+      // boss state
+      .on('broadcast',{event:'bs'},(d)=>{
+        if(!this.isHost) this._pendingBossSync=d.payload;
+      })
+      // attack from any guest → host processes
+      .on('broadcast',{event:'atk'},(d)=>{
+        if(this.isHost && this._handleRemoteAttack) this._handleRemoteAttack(d.payload);
+      })
+      // join announcement
+      .on('broadcast',{event:'join'},(d)=>{
+        const pl=d.payload;
+        if(!pl||!pl.id) return;
+        if(!this.peers[pl.id]) this.peers[pl.id]={state:null,render:null,name:pl.name||'Player',connected:true};
+        // Tell MP
+        const idx=Object.keys(this.peers).indexOf(pl.id);
+        if(idx>=0&&idx<MP.players.length) MP.players[idx+1]={id:pl.id,name:pl.name||'Player',ready:true};
+        if(ONLINE.onJoin) ONLINE.onJoin(pl.id, pl.name||'Player');
+      })
+      // host start signal
+      .on('broadcast',{event:'start'},(d)=>{
+        if(!this.isHost && this._onStart) this._onStart(d.payload);
+      })
+      // leave
+      .on('broadcast',{event:'leave'},(d)=>{
+        const pl=d.payload;
+        if(pl&&pl.id&&this.peers[pl.id]) this.peers[pl.id].connected=false;
+        if(ONLINE.onLeave) ONLINE.onLeave(pl&&pl.id);
+      })
       .subscribe(async(status)=>{
         if(status==='SUBSCRIBED'){
-          await this.channel.send({type:'broadcast',event:'join',payload:{}});
+          await this.channel.send({type:'broadcast',event:'join',
+            payload:{id:this.myId,name:MP.players[0].name,isHost:this.isHost}});
         }
       });
     return true;
   },
 
+  onJoin:  null,  // set by lobby
+  onLeave: null,  // set by lobby
+
   sendPlayerState(data){
     if(!this.channel||!this.active) return;
     const now=Date.now();
-    if(now-this.lastSent<33) return; // ~30fps
+    if(now-this.lastSent<33) return;
     this.lastSent=now;
-    this.channel.send({type:'broadcast',event:'pstate',payload:data});
+    data.id   = this.myId;
+    data.name = MP.players[0].name;
+    this.channel.send({type:'broadcast',event:'ps',payload:data});
   },
 
-  sendEnemyState(enemies, boss){
+  sendEnemyState(enemies,boss){
     if(!this.channel||!this.active||!this.isHost) return;
-    // Send compact enemy state
     const eState=enemies.filter(e=>!e.dead).map(e=>({
       id:e._id, hp:e.hp, x:Math.round(e.spr.x), dead:e.dead
     }));
-    this.channel.send({type:'broadcast',event:'enemies',payload:{enemies:eState}});
-    if(boss){
-      this.channel.send({type:'broadcast',event:'boss',payload:{hp:boss.hp,dead:boss.dead,phase:boss.phase}});
-    }
+    this.channel.send({type:'broadcast',event:'es',payload:{enemies:eState}});
+    if(boss) this.channel.send({type:'broadcast',event:'bs',
+      payload:{hp:boss.hp,dead:boss.dead,phase:boss.phase}});
   },
 
-  sendAttack(enemyId, damage){
-    // Guest sends attack to host for processing
+  sendAttack(enemyId,damage,dir){
     if(!this.channel||!this.active||this.isHost) return;
-    this.channel.send({type:'broadcast',event:'attack',payload:{id:enemyId,dmg:damage}});
+    this.channel.send({type:'broadcast',event:'atk',
+      payload:{id:enemyId,dmg:damage,dir:dir||1,from:this.myId}});
   },
 
-  interpolate(dt){
-    // Smooth remote player position
-    if(!this.remotePlayer) return;
-    if(!this.remoteRender){
-      this.remoteRender={...this.remotePlayer};
-    } else {
-      const lerp=(a,b,t)=>a+(b-a)*t;
-      const speed=Math.min(1, dt*12); // interpolation speed
-      this.remoteRender.x=lerp(this.remoteRender.x||this.remotePlayer.x, this.remotePlayer.x, speed);
-      this.remoteRender.y=lerp(this.remoteRender.y||this.remotePlayer.y, this.remotePlayer.y, speed);
-      this.remoteRender.hp=this.remotePlayer.hp;
-      this.remoteRender.maxHp=this.remotePlayer.maxHp;
-      this.remoteRender.dir=this.remotePlayer.dir;
-      this.remoteRender.atk=this.remotePlayer.atk;
-      this.remoteRender.skin=this.remotePlayer.skin;
-      this.remoteRender.weapon=this.remotePlayer.weapon;
-      this.remoteRender.wk=this.remotePlayer.wk;
-    }
+  // Smooth all remote peers each frame
+  interpolateAll(dt){
+    const speed=Math.min(1,dt*12);
+    const lp=(a,b,t)=>a+(b-a)*t;
+    Object.values(this.peers).forEach(peer=>{
+      if(!peer.state) return;
+      if(!peer.render){ peer.render={...peer.state}; return; }
+      peer.render.x      = lp(peer.render.x||peer.state.x, peer.state.x, speed);
+      peer.render.y      = lp(peer.render.y||peer.state.y, peer.state.y, speed);
+      peer.render.hp     = peer.state.hp;
+      peer.render.maxHp  = peer.state.maxHp;
+      peer.render.dir    = peer.state.dir;
+      peer.render.atk    = peer.state.atk;
+      peer.render.skin   = peer.state.skin;
+      peer.render.wk     = peer.state.wk;
+      peer.render.name   = peer.name;
+    });
   },
+
+  peerCount(){ return Object.values(this.peers).filter(p=>p.connected).length; },
 
   async leave(){
     if(this.channel){
-      await this.channel.send({type:'broadcast',event:'leave',payload:{}});
+      await this.channel.send({type:'broadcast',event:'leave',payload:{id:this.myId}});
       this.client.removeChannel(this.channel);
     }
     this.active=false; this.channel=null;
-    this.remotePlayer=null; this.remoteRender=null;
+    this.peers={}; this.myId=null;
   }
 };
-
 const W=800, H=480;
+const GAME_VERSION='v18';
 
 // ── DIFFICULTY ────────────────────────────────────────────────────────────────
 const DIFFICULTY = {
@@ -202,12 +275,23 @@ const STORY_BEATS = {
 };
 
 // ── MULTIPLAYER STATE ─────────────────────────────────────────────────────────
+// ── MULTIPLAYER STATE ─────────────────────────────────────────────────────────
+// players[0] = local player. players[1..5] = remote peers (filled on join/host)
 const MP = {
-  active: false,
-  p1name: 'Player 1',
-  p2name: 'Player 2',
+  active:  false,
+  maxPlayers: 6,
+  minToStart: 2,
+  players: [
+    {name:'Player 1', id:null, ready:false},
+    {name:'Player 2', id:null, ready:false},
+    {name:'Player 3', id:null, ready:false},
+    {name:'Player 4', id:null, ready:false},
+    {name:'Player 5', id:null, ready:false},
+    {name:'Player 6', id:null, ready:false},
+  ],
+  get p1name(){ return this.players[0].name; },
+  set p1name(v){ this.players[0].name=v; },
 };
-
 // ── AUDIO ENGINE ──────────────────────────────────────────────────────────────
 let audioCtx=null;
 let masterGain=null;
@@ -670,188 +754,231 @@ class OnlineLobbyScene extends Phaser.Scene {
 
   create(){
     this._inputEl = null;
-    this.status = '';
     this.isConnecting = false;
+    this._code = ONLINE.genCode();
 
-    const g = this.add.graphics();
+    // ── background ─────────────────────────────────────────────────────────
+    const g=this.add.graphics();
     g.fillStyle(0x06020f,1); g.fillRect(0,0,W,H);
-    g.fillStyle(0x1a0a30,0.6); g.fillRoundedRect(60,20,W-120,H-40,12);
-    g.lineStyle(1,0xc9a84c,0.4); g.strokeRoundedRect(60,20,W-120,H-40,12);
+    g.fillStyle(0x0d0820,0.85); g.fillRoundedRect(24,14,W-48,H-28,12);
+    g.fillStyle(0xc9a84c,0.3); g.fillRect(24,14,W-48,2);
 
-    this.add.text(W/2,46,'Online Multiplayer',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'20px',color:'#c9a84c'}).setOrigin(0.5);
-    this.add.text(W/2,72,'Play with Liam or Levi on a different device',{fontFamily:'monospace',fontSize:'10px',color:'#5a4a6a'}).setOrigin(0.5);
+    this.add.text(W/2,32,'Online Co-op',{
+      fontFamily:"'Cinzel Decorative',cursive",fontSize:'18px',color:'#c9a84c'
+    }).setOrigin(0.5);
+    this.add.text(W/2,52,'2–6 players · same room code · any skin',{
+      fontFamily:'monospace',fontSize:'9px',color:'#5a4a6a'
+    }).setOrigin(0.5);
 
-    // ── HOST section ────────────────────────────────────────────────────────
-    const code = ONLINE.genCode();
-    g.fillStyle(0x0a1a30,0.8); g.fillRoundedRect(80,96,W/2-100,140,8);
-    g.lineStyle(1,0x40c0ff,0.4); g.strokeRoundedRect(80,96,W/2-100,140,8);
-    this.add.text(160,110,'HOST A GAME',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'13px',color:'#40c0ff'}).setOrigin(0.5);
-    this.add.text(160,130,'Share this code:',{fontFamily:'monospace',fontSize:'10px',color:'#6a8a9a'}).setOrigin(0.5);
-    // Big room code display
-    this.codeTxt = this.add.text(160,158,code,{fontFamily:"'Cinzel Decorative',cursive",fontSize:'32px',color:'#ffffff',stroke:'#40c0ff',strokeThickness:1}).setOrigin(0.5);
-    this.tweens.add({targets:this.codeTxt,alpha:{from:0.6,to:1},duration:800,yoyo:true,repeat:-1});
-    this.add.text(160,188,'Send this to the other player',{fontFamily:'monospace',fontSize:'9px',color:'#4a6a7a'}).setOrigin(0.5);
+    // ── HOST panel (left half) ──────────────────────────────────────────────
+    g.fillStyle(0x081828,0.8); g.fillRoundedRect(32,64,W/2-44,118,8);
+    this.add.text(W/4+16,76,'HOST',{
+      fontFamily:"'Cinzel Decorative',cursive",fontSize:'12px',color:'#40c0ff'
+    }).setOrigin(0.5);
+    this.add.text(W/4+16,90,'Share this code with everyone:',{
+      fontFamily:'monospace',fontSize:'9px',color:'#5a7a8a'
+    }).setOrigin(0.5);
 
-    const hBtn = this.add.text(160,216,'HOST WITH THIS CODE',{fontFamily:'monospace',fontSize:'10px',color:'#000000',backgroundColor:'#40c0ff',padding:{x:14,y:8}}).setOrigin(0.5).setInteractive({cursor:'pointer'});
-    hBtn.on('pointerdown',()=> this.hostGame(code));
-    hBtn.on('pointerover',()=> hBtn.setStyle({color:'#002040',backgroundColor:'#80e0ff'}));
-    hBtn.on('pointerout', ()=> hBtn.setStyle({color:'#000000',backgroundColor:'#40c0ff'}));
+    this.codeTxt=this.add.text(W/4+16,118,this._code,{
+      fontFamily:"'Cinzel Decorative',cursive",fontSize:'30px',color:'#ffffff',
+      stroke:'#40c0ff',strokeThickness:1
+    }).setOrigin(0.5);
+    this.tweens.add({targets:this.codeTxt,alpha:{from:0.55,to:1},duration:900,yoyo:true,repeat:-1});
 
-    // ── JOIN section ────────────────────────────────────────────────────────
-    g.fillStyle(0x1a0a20,0.8); g.fillRoundedRect(W/2+20,96,W/2-100,140,8);
-    g.lineStyle(1,0xc9a84c,0.4); g.strokeRoundedRect(W/2+20,96,W/2-100,140,8);
-    this.add.text(W/2+120,110,'JOIN A GAME',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'13px',color:'#c9a84c'}).setOrigin(0.5);
-    this.add.text(W/2+120,130,'Enter room code:',{fontFamily:'monospace',fontSize:'10px',color:'#8a7a5a'}).setOrigin(0.5);
+    const hBtn=this.add.text(W/4+16,158,'HOST WITH THIS CODE',{
+      fontFamily:'monospace',fontSize:'9px',color:'#000',backgroundColor:'#40c0ff',
+      padding:{x:12,y:7}
+    }).setOrigin(0.5).setInteractive({cursor:'pointer'});
+    hBtn.on('pointerdown',()=>this.hostGame());
+    hBtn.on('pointerover',()=>hBtn.setStyle({color:'#002040',backgroundColor:'#80e0ff'}));
+    hBtn.on('pointerout', ()=>hBtn.setStyle({color:'#000',backgroundColor:'#40c0ff'}));
 
-    // Code input field (HTML)
-    this._buildCodeInput(W/2+20+14, 144);
+    // ── JOIN panel (right half) ────────────────────────────────────────────
+    g.fillStyle(0x180820,0.8); g.fillRoundedRect(W/2+12,64,W/2-44,118,8);
+    this.add.text(W*3/4-6,76,'JOIN',{
+      fontFamily:"'Cinzel Decorative',cursive",fontSize:'12px',color:'#c9a84c'
+    }).setOrigin(0.5);
+    this.add.text(W*3/4-6,90,'Enter the host\'s room code:',{
+      fontFamily:'monospace',fontSize:'9px',color:'#8a7a5a'
+    }).setOrigin(0.5);
 
-    const jBtn = this.add.text(W/2+120,216,'JOIN GAME',{fontFamily:'monospace',fontSize:'10px',color:'#000000',backgroundColor:'#c9a84c',padding:{x:14,y:8}}).setOrigin(0.5).setInteractive({cursor:'pointer'});
-    jBtn.on('pointerdown',()=> this.joinGame());
-    jBtn.on('pointerover',()=> jBtn.setStyle({color:'#1a0800',backgroundColor:'#ffd080'}));
-    jBtn.on('pointerout', ()=> jBtn.setStyle({color:'#000000',backgroundColor:'#c9a84c'}));
+    this._buildCodeInput(W/2+24, 106);
 
-    // ── Status / waiting area ────────────────────────────────────────────────
-    this.statusTxt = this.add.text(W/2,256,'',{fontFamily:'monospace',fontSize:'11px',color:'#40ff80',align:'center'}).setOrigin(0.5);
-    this.waitDots = 0;
-    this.waitTimer = 0;
+    const jBtn=this.add.text(W*3/4-6,158,'JOIN GAME',{
+      fontFamily:'monospace',fontSize:'9px',color:'#000',backgroundColor:'#c9a84c',
+      padding:{x:12,y:7}
+    }).setOrigin(0.5).setInteractive({cursor:'pointer'});
+    jBtn.on('pointerdown',()=>this.joinGame());
+    jBtn.on('pointerover',()=>jBtn.setStyle({color:'#1a0800',backgroundColor:'#ffd080'}));
+    jBtn.on('pointerout', ()=>jBtn.setStyle({color:'#000',backgroundColor:'#c9a84c'}));
 
-    // Player slots
-    g.fillStyle(0x100820,0.7); g.fillRoundedRect(80,272,W-160,80,8);
-    this.p1Slot = this.add.text(160,300,'P1: Waiting...',{fontFamily:'monospace',fontSize:'11px',color:'#40c0ff'}).setOrigin(0.5);
-    this.p2Slot = this.add.text(W-160,300,'P2: Waiting...',{fontFamily:'monospace',fontSize:'11px',color:'#c9a84c'}).setOrigin(0.5);
-    this.add.text(W/2,340,'Once both players are connected, the host starts the game.',{fontFamily:'monospace',fontSize:'9px',color:'#4a3a5a'}).setOrigin(0.5);
+    // ── Player slots grid (6 slots) ─────────────────────────────────────────
+    g.fillStyle(0x0a0818,0.75); g.fillRoundedRect(32,194,W-64,176,8);
+    this.add.text(W/2,204,'Connected Players',{
+      fontFamily:"'Cinzel Decorative',cursive",fontSize:'10px',color:'#5a4a7a'
+    }).setOrigin(0.5);
 
-    // Start (host only, enabled once P2 joins)
-    this.startBtn = this.add.text(W/2,378,'START GAME  →',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'14px',color:'#3a3a4a',backgroundColor:'#1a1a2a',padding:{x:20,y:10}}).setOrigin(0.5);
+    this._slotTxts=[];
+    const SLOT_COLS=3, SLOT_ROWS=2;
+    const sw=(W-88)/SLOT_COLS, sh=60;
+    const sx0=44, sy0=216;
+    const SLOT_COLS_DEF=ONLINE.PEER_COLORS;
+    for(let i=0;i<6;i++){
+      const col=i%SLOT_COLS, row=Math.floor(i/SLOT_COLS);
+      const sx=sx0+col*sw, sy=sy0+row*sh;
+      // slot bg
+      g.fillStyle(0x12101e,0.9); g.fillRoundedRect(sx,sy,sw-8,sh-6,6);
+      g.fillStyle(0x2a1a4a,0.5); g.fillRect(sx,sy,sw-8,2);
+      const label=i===0?`P1: ${MP.players[0].name} (you)`:'Waiting...';
+      const col2=i===0?'#40c0ff':ONLINE.PEER_COLORS[i]||'#6a5a7a';
+      const t=this.add.text(sx+(sw-8)/2, sy+18, label,{
+        fontFamily:'monospace',fontSize:'9px',color:col2
+      }).setOrigin(0.5);
+      const sub=this.add.text(sx+(sw-8)/2, sy+34, i===0?'local host':'—',{
+        fontFamily:'monospace',fontSize:'8px',color:'#3a2a5a'
+      }).setOrigin(0.5);
+      this._slotTxts.push({label:t,sub});
+    }
 
-    // Back
-    const bk = this.add.text(W/2,430,'← Back',{fontFamily:'monospace',fontSize:'11px',color:'#5a4a6a'}).setOrigin(0.5).setInteractive({cursor:'pointer'});
+    // ── Status & Start ──────────────────────────────────────────────────────
+    this.statusTxt=this.add.text(W/2,384,'',{
+      fontFamily:'monospace',fontSize:'10px',color:'#40ff80',align:'center'
+    }).setOrigin(0.5);
+
+    this.startBtn=this.add.text(W/2,414,'START GAME  →',{
+      fontFamily:"'Cinzel Decorative',cursive",fontSize:'13px',
+      color:'#3a3a4a',backgroundColor:'#1a1a2a',padding:{x:18,y:9}
+    }).setOrigin(0.5);
+
+    // ── Back ────────────────────────────────────────────────────────────────
+    const bk=this.add.text(W/2,450,'← Back',{
+      fontFamily:'monospace',fontSize:'10px',color:'#5a4a6a'
+    }).setOrigin(0.5).setInteractive({cursor:'pointer'});
     bk.on('pointerdown',()=>{ this._cleanup(); ONLINE.leave(); this.scene.start('ModeSelect'); });
 
-    // Init Supabase
+    // ── Min player counter label ─────────────────────────────────────────────
+    this.add.text(W/2,464,'Need at least 2 players to start',{
+      fontFamily:'monospace',fontSize:'8px',color:'#3a2a4a'
+    }).setOrigin(0.5);
+
     if(!ONLINE.init()){
-      this.statusTxt.setText('⚠ Multiplayer unavailable.\nConfigure Supabase keys in the code.').setColor('#ff8040');
+      this.statusTxt.setText('⚠ Supabase keys not set — multiplayer offline').setColor('#ff8040');
     }
   }
 
-  _buildCodeInput(x, y){
-    const canvas = this.sys.canvas;
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = rect.width/W, scaleY = rect.height/H;
-    const inp = document.createElement('input');
-    inp.maxLength = 4;
-    inp.placeholder = '0000';
-    inp.id = 'room-code-input';
+  _buildCodeInput(x,y){
+    const canvas=this.sys.canvas;
+    const rect=canvas.getBoundingClientRect();
+    const sx=rect.width/W, sy=rect.height/H;
+    const inp=document.createElement('input');
+    inp.maxLength=4; inp.placeholder='0000'; inp.id='room-code-input';
     Object.assign(inp.style,{
       position:'absolute',
-      left:`${rect.left + x*scaleX}px`,
-      top:`${rect.top + y*scaleY}px`,
-      width:`${148*scaleX}px`,
-      height:`${36*scaleY}px`,
-      background:'rgba(10,6,24,0.95)',
-      border:'2px solid #c9a84c',
-      color:'#ffffff',
-      fontFamily:"'Cinzel Decorative',cursive",
-      fontSize:`${22*scaleY}px`,
-      textAlign:'center',
-      letterSpacing:'8px',
-      outline:'none',
-      borderRadius:'6px',
-      zIndex:'999',
+      left:`${rect.left+x*sx}px`, top:`${rect.top+y*sy}px`,
+      width:`${150*sx}px`, height:`${32*sy}px`,
+      background:'rgba(10,6,24,0.95)', border:'2px solid #c9a84c',
+      color:'#fff', fontFamily:"'Cinzel Decorative',cursive",
+      fontSize:`${20*sy}px`, textAlign:'center', letterSpacing:'8px',
+      outline:'none', borderRadius:'6px', zIndex:'999',
     });
-    inp.oninput = ()=>{ inp.value = inp.value.replace(/[^0-9]/g,'').slice(0,4); };
+    inp.oninput=()=>{ inp.value=inp.value.replace(/[^0-9]/g,'').slice(0,4); };
     document.body.appendChild(inp);
-    this._inputEl = inp;
-    this.events.once('shutdown', ()=> this._cleanup());
+    this._inputEl=inp;
+    this.events.once('shutdown',()=>this._cleanup());
   }
 
   _cleanup(){
-    if(this._inputEl){ this._inputEl.remove(); this._inputEl = null; }
+    if(this._inputEl){ this._inputEl.remove(); this._inputEl=null; }
   }
 
-  async hostGame(code){
+  // Update a slot UI by peer index (1-based for peers, 0 = local)
+  _refreshSlots(){
+    // slot 0 is always local
+    this._slotTxts[0].label.setText(`P${1}: ${MP.players[0].name} (you)`);
+    this._slotTxts[0].sub.setText(ONLINE.isHost?'host':'joined');
+    // slots 1-5
+    let idx=1;
+    Object.values(ONLINE.peers).forEach(peer=>{
+      if(idx>=6) return;
+      const connected=peer.connected;
+      const colHex=ONLINE.PEER_COLORS[idx]||'#aaa';
+      this._slotTxts[idx].label.setText(connected?`P${idx+1}: ${peer.name} ✓`:'Disconnected')
+        .setColor(connected?colHex:'#ff4040');
+      this._slotTxts[idx].sub.setText(connected?'online':'—');
+      idx++;
+    });
+    // clear remaining
+    for(let i=idx;i<6;i++){
+      this._slotTxts[i].label.setText('Waiting...').setColor('#3a2a5a');
+      this._slotTxts[i].sub.setText('—');
+    }
+    // Update start button state
+    const total=1+ONLINE.peerCount();
+    const canStart=ONLINE.isHost && total>=MP.minToStart;
+    if(canStart && !this._startEnabled){
+      this._startEnabled=true;
+      this.startBtn.setStyle({color:'#000',backgroundColor:'#40c060'})
+        .setInteractive({cursor:'pointer'})
+        .on('pointerdown',()=>this._doStart());
+    }
+    this.statusTxt.setText(
+      ONLINE.isHost
+        ? `${total}/${MP.maxPlayers} connected${canStart?' — ready to start!':''}`
+        : `${total} connected · waiting for host…`
+    ).setColor(canStart?'#40ff80':'#c9a84c');
+  }
+
+  async hostGame(){
     if(this.isConnecting) return;
     if(!ONLINE.client){ this.statusTxt.setText('⚠ Supabase not configured.').setColor('#ff4040'); return; }
-    this.isConnecting = true;
-    this.statusTxt.setText('Creating room...').setColor('#40c0ff');
-    ONLINE.active = true;
-    MP.active = true;
-    MP.p1name = MP.p1name || 'Host';
+    this.isConnecting=true;
+    ONLINE.active=true; ONLINE.isHost=true; MP.active=true;
+    this._startEnabled=false;
 
-    await ONLINE.host(code,
-      // P2 joined
-      ()=>{
-        MP.p2name = 'Player 2';
-        this.p2Slot.setText(`P2: ${MP.p2name} ✓`).setColor('#40ff80');
-        this.statusTxt.setText('Player 2 connected! Start when ready.').setColor('#40ff80');
-        // Enable start button
-        this.startBtn.setStyle({color:'#000000',backgroundColor:'#40c060'})
-          .setInteractive({cursor:'pointer'})
-          .on('pointerdown',()=> this._startOnlineGame(code));
-      },
-      // Received P2 state
-      (payload)=>{ ONLINE.remotePlayer = payload; },
-      // P2 disconnected
-      ()=>{ this.p2Slot.setText('P2: Disconnected').setColor('#ff4040'); this.statusTxt.setText('Player 2 left.').setColor('#ff4040'); }
-    );
-    this.p1Slot.setText(`P1: ${MP.p1name} (you) ✓`).setColor('#40c0ff');
-    this.statusTxt.setText(`Room ${code} created. Waiting for Player 2...`).setColor('#c9a84c');
+    ONLINE.onJoin=(id,name)=>{
+      this._refreshSlots();
+    };
+    ONLINE.onLeave=(id)=>{
+      this._refreshSlots();
+    };
+
+    await ONLINE.connect(this._code);
+    this._slotTxts[0].sub.setText('host');
+    this.statusTxt.setText(`Room ${this._code} created. Waiting for players…`).setColor('#c9a84c');
   }
 
   async joinGame(){
-    const inp = this._inputEl;
-    const code = inp ? inp.value.trim() : '';
-    if(code.length !== 4){ this.statusTxt.setText('Enter the 4-digit code first.').setColor('#ff4040'); return; }
+    const inp=this._inputEl;
+    const code=inp?inp.value.trim():'';
+    if(code.length!==4){ this.statusTxt.setText('Enter the 4-digit code first.').setColor('#ff4040'); return; }
     if(this.isConnecting) return;
     if(!ONLINE.client){ this.statusTxt.setText('⚠ Supabase not configured.').setColor('#ff4040'); return; }
-    this.isConnecting = true;
-    this.statusTxt.setText(`Joining room ${code}...`).setColor('#c9a84c');
-    ONLINE.active = true; ONLINE.isHost = false;
-    MP.active = true; MP.p2name = MP.p2name || 'Guest';
+    this.isConnecting=true;
+    ONLINE.active=true; ONLINE.isHost=false; MP.active=true;
+    this._startEnabled=false;
 
-    await ONLINE.join(code,
-      // Host player state
-      (payload)=>{ ONLINE.remotePlayer = payload; },
-      // Enemy sync from host
-      (payload)=>{ ONLINE._pendingEnemySync = payload; },
-      // Boss sync from host
-      (payload)=>{ ONLINE._pendingBossSync = payload; },
-      // Disconnect
-      ()=>{ this.statusTxt.setText('Host disconnected.').setColor('#ff4040'); }
-    );
-
-    // Listen for start signal
-    ONLINE._onStart = ()=>{
+    ONLINE.onJoin=(id,name)=>{ this._refreshSlots(); };
+    ONLINE.onLeave=(id)=>{ this._refreshSlots(); };
+    ONLINE._onStart=()=>{
       this._cleanup();
       this.scene.start('SkinSelect');
     };
 
-    this.p2Slot.setText(`P2: ${MP.p2name} (you) ✓`).setColor('#40ff80');
-    this.statusTxt.setText(`Joined room ${code}. Waiting for host...`).setColor('#40ff80');
+    await ONLINE.connect(code);
+    this._slotTxts[0].sub.setText('joined');
+    this.statusTxt.setText(`Joined room ${code}. Waiting for host to start…`).setColor('#40ff80');
   }
 
-  _startOnlineGame(code){
+  _doStart(){
     this._cleanup();
-    // Tell P2 to start
-    ONLINE.channel.send({ type:'broadcast', event:'start', payload:{ level:0 } });
+    ONLINE.channel.send({type:'broadcast',event:'start',payload:{level:0}});
     this.scene.start('SkinSelect');
   }
 
-  update(time, delta){
-    // Animate waiting dots
-    this.waitTimer += delta;
-    if(this.waitTimer > 500){
-      this.waitTimer = 0;
-      this.waitDots = (this.waitDots+1)%4;
-    }
-    // Listen for start signal if we're P2
-    if(ONLINE.active && !ONLINE.isHost && ONLINE.channel){
-      // Handled via subscription in join()
-    }
+  update(time,delta){
+    // slots refresh handled by callbacks; nothing to poll
   }
 }
-// ═══════════════════════════════════════════════════════════════════════════════
 class DifficultyScene extends Phaser.Scene {
   constructor(){super('Difficulty');}
   create(){
@@ -1206,72 +1333,69 @@ class SkinScene extends Phaser.Scene {
 class TitleScene extends Phaser.Scene {
   constructor(){super('Title');}
   create(){
-    this.t=0;
-    this.bg=this.add.graphics();
-    this.pts=Array.from({length:60},()=>({
-      x:rnd(0,W),y:rnd(0,H),vy:-Math.random()*0.7-0.2,
-      r:Math.random()*2+0.5,ph:Math.random()*Math.PI*2,
-      col:Math.random()>0.5?0xc9a84c:0x8040c0
-    }));
-    this.add.text(W/2,H*0.22,'SARNARIA',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'54px',color:'#c9a84c',stroke:'#4a2000',strokeThickness:4,shadow:{x:0,y:0,color:'#c9a84c',blur:40,fill:true}}).setOrigin(0.5);
-    this.add.text(W/2,H*0.38,'Heart of the Forest',{fontFamily:"'Cinzel Decorative',cursive",fontSize:'18px',color:'#8a6a9a'}).setOrigin(0.5);
+    // Canvas just holds the dark-green base; the HTML overlay sits on top.
+    this.add.graphics().fillStyle(0x0d1a0d,1).fillRect(0,0,W,H);
+
+    // Remove any stale overlay (e.g. when returning here from Win / Quit)
+    const stale=document.getElementById('sonaria-home');
+    if(stale) stale.remove();
+
+    this._started=false;
+    const begin=()=>{
+      if(this._started) return;
+      this._started=true;
+      initAudio(); // unlock Web Audio on this trusted gesture
+      if(this._beginBtn) this._beginBtn.textContent='Loading…';
+      // brief delay lets the unlock tone play before the scene changes
+      setTimeout(()=>{ this._cleanupHome(); this.scene.start('Intro'); },200);
+    };
+
+    // Build the home screen as HTML/CSS (styled by #sonaria-home in <style>)
+    const home=document.createElement('div');
+    home.id='sonaria-home';
+
+    const h1=document.createElement('h1');
+    h1.textContent='SONARIA';
+
+    const sub=document.createElement('div');
+    sub.className='sub';
+    sub.textContent='Heart of the Forest';
+
+    const btn=document.createElement('button');
+    btn.className='begin';
+    btn.textContent='BEGIN ADVENTURE';
+    btn.addEventListener('click',begin);
+
+    home.appendChild(h1);
+    home.appendChild(sub);
+    home.appendChild(btn);
+
     if(SAVE.highScore>0){
-      this.add.text(W/2,H*0.48,`High Score: ${SAVE.highScore.toLocaleString()}`,{fontFamily:"'Cinzel Decorative',cursive",fontSize:'13px',color:'#c9a84c'}).setOrigin(0.5);
+      const hs=document.createElement('div');
+      hs.className='hs';
+      hs.textContent='High Score · '+SAVE.highScore.toLocaleString();
+      home.appendChild(hs);
     }
-    this.add.text(W/2,H*0.55,'← → Move   ↑/Z Jump   X Attack   Q Special   ESC Pause',{fontFamily:'monospace',fontSize:'13px',color:'#6a5a7a'}).setOrigin(0.5);
-    this.add.text(W/2,H*0.62,'Kill enemies to earn XP — spend it in the Shop between levels',{fontFamily:'monospace',fontSize:'11px',color:'#4a3a5a'}).setOrigin(0.5);
-    // Sound unlock prompt — shows until audio context running
-    const sndPrompt=this.add.text(W/2,H*0.7,'🔊 Tap anywhere to enable sound',{fontFamily:'monospace',fontSize:'11px',color:'#4a8a4a'}).setOrigin(0.5);
-    this.tweens.add({targets:sndPrompt,alpha:{from:0.3,to:1},duration:900,yoyo:true,repeat:-1});
-    const _chk=setInterval(()=>{
-      if(!sndPrompt.active){clearInterval(_chk);return;}
-      if(audioCtx&&audioCtx.state==='running'){
-        sndPrompt.setText('🔊 Sound enabled!').setColor('#40c060');
-        clearInterval(_chk);
-        this.time.delayedCall(2000,()=>{if(sndPrompt.active)sndPrompt.destroy();});
-      }
-    },400);
-    // Use an HTML button so Chrome treats it as a trusted gesture for audio
-    const startBtn=document.createElement('button');
-    startBtn.id='start-btn';
-    startBtn.textContent='TAP TO START + ENABLE SOUND';
-    Object.assign(startBtn.style,{
-      position:'absolute',bottom:'80px',left:'50%',transform:'translateX(-50%)',
-      background:'rgba(10,6,24,0.95)',border:'2px solid #c9a84c',
-      color:'#c9a84c',fontFamily:"'Cinzel Decorative',cursive",fontSize:'14px',
-      padding:'14px 28px',cursor:'pointer',letterSpacing:'2px',
-      borderRadius:'4px',zIndex:'500',touchAction:'manipulation',
-      webkitTapHighlightColor:'rgba(201,168,76,0.3)',
-    });
-    startBtn.addEventListener('click',()=>{
-      initAudio();
-      startBtn.textContent='🔊 Sound enabled — loading...';
-      startBtn.style.borderColor='#40c060';
-      startBtn.style.color='#40c060';
-      // Small delay so the tone plays before scene change
-      setTimeout(()=>{
-        startBtn.remove();
-        this.scene.start('Intro');
-      }, 200);
-    });
-    // Also allow keyboard
-    this.input.keyboard.once('keydown',()=>{
-      startBtn.remove();
-      this.scene.start('Intro');
-    });
-    document.getElementById('game-container').appendChild(startBtn);
-    // Cleanup if scene changes without clicking
-    this.events.once('shutdown',()=>{ if(startBtn.parentNode) startBtn.remove(); });
+
+    const ver=document.createElement('div');
+    ver.className='ver';
+    ver.textContent='Sonaria '+GAME_VERSION;
+    home.appendChild(ver);
+
+    document.getElementById('game-container').appendChild(home);
+    this._homeEl=home;
+    this._beginBtn=btn;
+
+    // Keyboard also starts the adventure
+    this.input.keyboard.once('keydown',begin);
+
+    // Clean up the overlay if the scene shuts down for any reason
+    this.events.once('shutdown',()=>this._cleanupHome());
   }
-  update(){
-    this.t+=0.016;const g=this.bg;g.clear();
-    g.fillStyle(0x06020f,1);g.fillRect(0,0,W,H);
-    this.pts.forEach((p,i)=>{
-      p.y+=p.vy;if(p.y<-5)p.y=H+5;
-      g.fillStyle(p.col,0.4+Math.sin(this.t*2+p.ph)*0.4);
-      g.fillCircle(p.x,p.y,p.r);
-    });
-    g.fillStyle(0x200838,0.5);g.fillRect(0,H*0.88,W,H*0.12);
+
+  _cleanupHome(){
+    if(this._homeEl&&this._homeEl.parentNode){ this._homeEl.remove(); }
+    this._homeEl=null;
   }
 }
 
@@ -2164,8 +2288,8 @@ class GameScene extends Phaser.Scene {
     if(!ONLINE.active) return;
     const p=this.player, ps=p.spr;
 
-    // Interpolate remote player position (smooth movement)
-    ONLINE.interpolate(dt);
+    // Smooth all remote peers
+    ONLINE.interpolateAll(dt);
 
     // Send our own state
     ONLINE.sendPlayerState({
@@ -2175,20 +2299,17 @@ class GameScene extends Phaser.Scene {
       skin:SAVE.skin, weapon:SAVE.weapon,
     });
 
-    // HOST: send enemy and boss state to guest every 3 frames
+    // HOST: broadcast enemy/boss state every 3 frames
     if(ONLINE.isHost){
       if(!this._syncFrame) this._syncFrame=0;
       this._syncFrame++;
       if(this._syncFrame%3===0){
         ONLINE.sendEnemyState(this.enemies, this.boss.active?this.boss:null);
       }
-      // Handle remote attacks from guest
       if(!ONLINE._handleRemoteAttack){
         ONLINE._handleRemoteAttack=(payload)=>{
-          // Find enemy by id and apply damage
           const e=this.enemies.find(e=>e._id===payload.id&&!e.dead);
           if(e) this.hitEntity(e, payload.dmg, payload.dir||1, true);
-          // Boss attack
           if(payload.id==='boss'&&this.boss.active&&!this.boss.dead){
             this.hitBoss(payload.dmg, payload.dir||1);
           }
@@ -2196,7 +2317,7 @@ class GameScene extends Phaser.Scene {
       }
     }
 
-    // GUEST: apply enemy sync from host
+    // GUEST: apply enemy/boss sync from host
     if(!ONLINE.isHost){
       if(ONLINE._pendingEnemySync){
         const sync=ONLINE._pendingEnemySync;
@@ -2225,94 +2346,90 @@ class GameScene extends Phaser.Scene {
       }
     }
 
-    // Draw remote player with full detail
-    if(ONLINE.remoteRender){
-      this.drawRemotePlayer(this.charGfx, ONLINE.remoteRender);
-    }
+    // Draw all remote peers
+    let peerIdx=0;
+    Object.values(ONLINE.peers).forEach(peer=>{
+      if(!peer.connected||!peer.render) return;
+      this.drawRemotePlayer(this.charGfx, peer.render, peerIdx);
+      peerIdx++;
+    });
   }
 
-  drawRemotePlayer(g, state){
+  drawRemotePlayer(g, state, peerIdx){
     if(!state||!state.x) return;
-    const {x,y,dir,hp,maxHp,skin,atk,wk} = state;
-    const sk = SKINS[skin] || SKINS.alvano;
-    const f = dir||1;
+    const {x,y,dir,hp,maxHp,skin,atk,wk,name} = state;
+    const sk=SKINS[skin]||SKINS.alvano;
+    const f=dir||1;
     const t=this.t;
 
-    // Use same detail level as local player
     // Shadow
     g.fillStyle(0x000000,0.2); g.fillEllipse(x,y+22,30,8);
-
     const ll=Math.sin((wk||0)*1.57)*8;
     const rl=-Math.sin((wk||0)*1.57)*8;
-
     // Boots
     g.fillStyle(sk.bootCol||0x2a1404,1);
     g.fillEllipse(x-5,y+21+ll,14,8); g.fillEllipse(x+5,y+21+rl,14,8);
     g.fillRect(x-9,y+12+ll,9,11); g.fillRect(x+1,y+12+rl,9,11);
-
     // Legs
     g.fillStyle(sk.bodyCol,1);
     g.fillRect(x-8,y+2,7,12+ll); g.fillRect(x+1,y+2,7,12+rl);
-
     // Body/cloak
     g.fillStyle(sk.cloakCol,1);
     g.fillTriangle(x,y-16,x-f*16,y+8,x+f*7,y+8);
     g.fillStyle(sk.bodyCol,1); g.fillRect(x-8,y-16,16,20);
-
     // Arms
     g.fillStyle(sk.bodyCol,1);
     g.fillRect(x-18,y-16,10,4); g.fillRect(x+8,y-16,10,4);
-
-    // Weapon
+    // Weapon flash
     if(atk){
       g.fillStyle(sk.accentCol||0xc9a84c,0.9);
       g.fillRect(x+f*10,y-26,f*3,22);
       g.fillRect(x+f*7,y-14,f*9,3);
     }
-
     // Head
     g.fillStyle(sk.headCol,1); g.fillCircle(x,y-24,10);
     g.fillStyle(sk.hoodCol,0.85); g.fillCircle(x,y-26,8);
     g.fillStyle(sk.eyeCol,0.9); g.fillCircle(x+f*4,y-25,2.5);
     g.fillStyle(0x000000,0.6); g.fillCircle(x+f*4,y-25,1.2);
-
-    // Special features per skin
+    // Skin extras
     if(skin==='roar'){
       g.fillStyle(sk.hairCol||0x3a1a04,1);g.fillCircle(x,y-26,14);
       g.fillStyle(0xa06010,0.7);g.fillCircle(x,y-26,10);
       g.fillStyle(sk.headCol,1);g.fillEllipse(x,y-24,18,14);
-      g.fillStyle(sk.eyeCol,1);g.fillEllipse(x-5,y-26,6,4);g.fillEllipse(x+5,y-26,6,4);
     }
     if(skin==='liam'){
       g.fillStyle(sk.cloakCol,1);
       g.fillTriangle(x,y-52,x-10,y-34,x+10,y-34);
       g.fillRect(x-13,y-36,26,5);
-      g.fillStyle(0xc9a84c,0.8);g.fillCircle(x,y-46,2.5);
     }
     if(skin==='vampirina'){
       g.fillStyle(0x300040,0.75);
       g.fillTriangle(x-8,y-20,x-36,y-46,x,y-10);
       g.fillTriangle(x+8,y-20,x+36,y-44,x,y-10);
-      g.fillStyle(0xff0030,0.9);g.fillCircle(x-4,y-25,3);g.fillCircle(x+4,y-25,3);
     }
     if(skin==='levi'){
       g.fillStyle(sk.cloakCol,1);g.fillRect(x-12,y-32,24,5);
       g.fillTriangle(x,y-44,x-9,y-32,x+9,y-32);
     }
 
-    // Name tag
-    const name=ONLINE.isHost?(MP.p2name||'P2'):(MP.p1name||'P1');
-    if(!this._remoteTxt){
-      this._remoteTxt=this.add.text(0,0,name,{
-        fontFamily:'monospace',fontSize:'9px',color:'#40ff80',
+    // Per-peer colour name tag (avoids single _remoteTxt clash)
+    const tagColor=ONLINE.PEER_COLORS[peerIdx]||'#40ff80';
+    const tagKey='_peerTxt_'+peerIdx;
+    if(!this[tagKey]){
+      this[tagKey]=this.add.text(0,0,name||'',{
+        fontFamily:'monospace',fontSize:'8px',color:tagColor,
         stroke:'#000000',strokeThickness:2
       }).setDepth(13);
     }
-    this._remoteTxt.setPosition(x-this._remoteTxt.width/2, y-50);
+    this[tagKey].setColor(tagColor);
+    this[tagKey].setText(name||'P?');
+    this[tagKey].setPosition(x-this[tagKey].width/2, y-50);
 
-    // HP bar
+    // HP bar — tinted to peer colour
+    const rgb=Phaser.Display.Color.HexStringToColor(tagColor);
     g.fillStyle(0x002000,0.7); g.fillRect(x-18,y-44,36,4);
-    g.fillStyle(0x40ff40,1); g.fillRect(x-18,y-44,Math.max(0,36*(hp/maxHp)),4);
+    g.fillStyle(rgb.color||0x40ff40,1);
+    g.fillRect(x-18,y-44,Math.max(0,36*((hp||1)/(maxHp||1))),4);
   }
 
   // ── PLAYER UPDATE ──────────────────────────────────────────────────────────
@@ -2793,6 +2910,7 @@ class GameScene extends Phaser.Scene {
   }
   updateHpOrbs(dt){
     const g=this.fxGfx;
+    const ps=this.player.spr;
     this.hpOrbs.forEach(orb=>{
       if(orb.collected) return;
       orb.bob+=dt*2.5;
@@ -4584,6 +4702,7 @@ class GameScene extends Phaser.Scene {
     const bs=b.spr,x=bs.x,y=bs.y,f=b.dir;
     const pulse=Math.sin(this.t*5)*0.5;
     const wk=b.wk;
+    const t=this.t;
 
     if(b.phase===1){g.fillStyle(0xaa00ff,0.06+Math.sin(this.t*6)*0.04);g.fillCircle(x,y,65);}
 
@@ -4796,7 +4915,6 @@ class GameScene extends Phaser.Scene {
         g.fillStyle(0x80ff40,0.7+Math.sin(this.t*4)*0.2);
         g.fillCircle(x-8,y-22+pulse*4,3);g.fillCircle(x+8,y-22+pulse*4,3);
         // Web silk from abdomen
-        g.lineStyle(1,0xffffff,0.2);
         for(let i=0;i<3;i++){g.fillStyle(0xffffff,0.15);g.fillRect(x+rnd(-8,8),y+10,1,rnd(20,40));}
         break;
       }
@@ -4829,7 +4947,6 @@ class GameScene extends Phaser.Scene {
         g.fillTriangle(x-16,y-30,x-50,y-70+pulse*4,x+4,y-10);
         g.fillTriangle(x+16,y-30,x+50,y-68+pulse*4,x-4,y-10);
         g.fillStyle(0x283010,0.4);
-        g.lineBetween&&null; // just visual
         // Neck
         g.fillStyle(0x204a10,1);g.fillRect(x+f*14,y-48,f*14,24);
         // Head
@@ -4897,7 +5014,9 @@ class GameScene extends Phaser.Scene {
     g.fillStyle(0x000000,0.7);g.fillRect(bx2-2,by2-2,bw+4,bh+4);
     g.fillStyle(0x220022,1);g.fillRect(bx2,by2,bw,bh);
     g.fillStyle(b.hp/b.maxHp>0.5?0xe03030:0xff6600,1);g.fillRect(bx2,by2,bw*(b.hp/b.maxHp),bh);
-    g.lineStyle(1,0xaa40ff,0.8);g.strokeRect(bx2,by2,bw,bh);
+    g.fillStyle(0xaa40ff,0.8);
+    g.fillRect(bx2,by2,bw,1);g.fillRect(bx2,by2+bh-1,bw,1);
+    g.fillRect(bx2,by2,1,bh);g.fillRect(bx2+bw-1,by2,1,bh);
   }
 
   drawCompanion(g){
@@ -5308,9 +5427,10 @@ class GameScene extends Phaser.Scene {
       g.fillCircle(mx-6,my-2,5); // ear
       g.fillStyle(0x8a6040,0.6);
       g.fillCircle(mx,my,5); // face
-      // Tail curling
-      g.lineStyle(2,0x6a4020,0.6);
-      g.beginPath();g.moveTo(mx+6,my+10);g.lineTo(mx+20,my+18);g.lineTo(mx+24,my+10);g.strokePath();
+      // Tail curling — filled triangles (no strokePath; avoids per-frame WebGL flushes on mobile)
+      g.fillStyle(0x6a4020,0.6);
+      g.fillTriangle(mx+6,my+8,mx+6,my+12,mx+20,my+18);
+      g.fillTriangle(mx+18,my+16,mx+22,my+20,mx+24,my+10);
     }
 
     // Parrots on branches
